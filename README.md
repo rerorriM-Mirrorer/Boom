@@ -46,7 +46,7 @@ Settings changed on one character are sent to every Boom client and saved in `da
 - `//boom sc solo <n>|off` - when no chain is possible, a member at this TP weapon skills alone (default 3000)
 - Shortcuts: `//boom target ...`, `//boom opener ...`, `//boom hold ...`, `//boom steps ...`, `//boom solo ...` work without `sc`
 - `//boom sc bp on|off`, `//boom sc mixed on|off`, `//boom sc announce local|party|off`
-- `//boom sc set color_member|color_ability|color_chain <n>` - plan line colors (defaults: names 207 light blue, abilities 158 green, result 0 white, as seen on the user's screen)
+- `//boom sc set color_member|color_ability|color_chain <n>` - plan line colors (defaults: names 207 light blue, abilities 0 white, result 158 green, as seen on the user's screen)
 - `//boom sc set <key> <value>` - timing: `poll_window` 0.5, `ack_window` 0.7, `step_margin` 0.4, `step_timeout` 6, `retry_delay` 1.5 (seconds)
 
 Plan choice, in order: a requested target, a requested opener, the highest chain level, then more steps (each step is another magic-burst window). A chain that is already a requested target is not continued into one that isn't. `//boom debug on` adds `SC:` lines explaining polls, plans, refusals and aborts.

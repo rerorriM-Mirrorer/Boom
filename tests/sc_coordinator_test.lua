@@ -465,9 +465,9 @@ check('plan line colors character, ability and result differently', function()
     local c = w:add_client('Clairvaux', { tp = 1000, ws = { 'Savage Blade' } })
     c.sc.env.chat.colored = function(v, color) return '<' .. color .. '>' .. tostring(v) .. '</>' end
     local line = c.sc:colored_plan({ { member = 'Cioara', name = 'Poison Nails' }, { member = 'Clairvaux', name = 'Fast Blade' } }, 'Distortion')
-    eq(line, '<167>Skillchain:</> <207>Cioara</> <158>Poison Nails</><0> > </><207>Clairvaux</> <158>Fast Blade</><0> = </><0>Distortion</>')
+    eq(line, '<167>Skillchain:</> <207>Cioara</> <0>Poison Nails</><0> > </><207>Clairvaux</> <0>Fast Blade</><0> = </><158>Distortion</>')
     c.settings.color_member = 5
-    assert(c.sc:colored_plan({ { member = 'Myrr', name = 'Brainshaker' } }, nil):find('<5>Myrr</>.*<0> %(solo%)</>'))
+    assert(c.sc:colored_plan({ { member = 'Myrr', name = 'Brainshaker' } }, nil):find('<5>Myrr</>.*<158> %(solo%)</>'))
 end)
 
 check('a step waits once for Failsafe before re-sending', function()

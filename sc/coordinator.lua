@@ -74,8 +74,8 @@ coordinator.default_settings = {
     retry_delay = 1.5,
     solo_tp = 3000,      -- release alone at this TP when no chain is possible (0 = never)
     color_member = 207,  -- plan line colors: character name (user sees light blue)
-    color_ability = 158, --   weapon skill / blood pact (green)
-    color_chain = 0,     --   skillchain result (white)
+    color_ability = 0,   --   weapon skill / blood pact (white)
+    color_chain = 158,   --   skillchain result (green)
     retry_interval = 1.0,
     trust_path = '',
 }
@@ -575,13 +575,13 @@ function coordinator:colored_plan(steps, chain)
     local parts = {}
     for _, step in ipairs(steps) do
         parts[#parts + 1] = c(step.member, tonumber(s.color_member) or 207) .. ' ' ..
-            c(step.name, tonumber(s.color_ability) or 158)
+            c(step.name, tonumber(s.color_ability) or 0)
     end
     local result
     if chain == nil or chain == '' then
-        result = c(' (solo)', tonumber(s.color_chain) or 0)
+        result = c(' (solo)', tonumber(s.color_chain) or 158)
     else
-        result = c(' = ', 0) .. c(chain, tonumber(s.color_chain) or 0)
+        result = c(' = ', 0) .. c(chain, tonumber(s.color_chain) or 158)
     end
     return c('Skillchain:', 167) .. ' ' .. table.concat(parts, c(' > ', 0)) .. result
 end
