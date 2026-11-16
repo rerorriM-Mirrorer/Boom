@@ -3,7 +3,7 @@
 -- coordinator (sc/, //boom sc) uses weapon skills and Blood Pact: Rage.
 _addon.name = 'Boom'
 _addon.author = 'A'
-_addon.version = '0.2.2-test7'
+_addon.version = '0.2.3-test8'
 _addon.commands = {'boom'}
 _addon.windower = '4'
 
@@ -11,7 +11,26 @@ local res = require('resources')
 require('chat')
 require('packets')
 
-local active = true
+-- Saved per character in data/settings.xml (0.2.3): magic bursts on/off and
+-- bursting with blood pacts. Without Windower's config library (offline
+-- tests) the defaults apply and nothing is saved.
+local boom_settings = { mb = true, pacts = true }
+local save_settings = function() end
+do
+    local ok, config = pcall(require, 'config')
+    if ok and type(config) == 'table' and config.load then
+        local loaded_ok, loaded = pcall(config.load, 'data/settings.xml', { mb = true, pacts = true })
+        if loaded_ok and type(loaded) == 'table' then
+            boom_settings = loaded
+            save_settings = function() pcall(config.save, boom_settings, 'all') end
+        end
+    end
+end
+local pacts_ok, burst_pacts = pcall(require, 'burst_pacts')
+if not pacts_ok then burst_pacts = nil end
+
+local active = boom_settings.mb ~= false
+local pacts_enabled = boom_settings.pacts ~= false
 local debug_enabled = false
 local trace_enabled = false
 local sequence = 0
@@ -126,6 +145,7 @@ local function skip(reason)
 end
 
 -- Skillchain coordinator (sc/). Isolated: if it fails to load, bursting still works.
+local pact_burst_elements -- defined below; tells the coordinator which elements our avatar can burst
 local sc_module = nil
 do
     local ok, mod = pcall(require, 'sc/boom_sc')
@@ -133,6 +153,7 @@ do
         local init_ok, err = pcall(mod.init, {
             message = message, notice = notice, debug = debug,
             colored = colored, state_color = state_color,
+            burst_elements = function() return pact_burst_elements and pact_burst_elements() or {} end,
         })
         if init_ok then sc_module = mod else notice('Skillchains:', 'OFF - '..tostring(err)) end
     else
@@ -217,6 +238,63 @@ local function pick_spell(chain, player)
     return nil
 end
 
+-- Blood pact bursts (0.2.3). With an avatar out and Blood Pact: Rage ready, a
+-- magical pact of a burstable element goes before any spell.
+local function rage_ready()
+    if type(res.job_abilities) ~= 'table' or not res.job_abilities.with
+        or not windower.ffxi.get_ability_recasts then return false end
+    local rage = res.job_abilities:with('en', 'Blood Pact: Rage')
+    if not rage then return false end
+    local recasts = windower.ffxi.get_ability_recasts() or {}
+    return (recasts[rage.recast_id] or 0) == 0
+end
+
+-- Returns a lookup name -> pact resource (known to the summoned avatar and
+-- affordable), or nil when pacts can't be used now.
+local function usable_pacts(player)
+    if not burst_pacts or not pacts_enabled then return nil end
+    if not windower.ffxi.get_mob_by_target('pet') or not windower.ffxi.get_abilities then return nil end
+    for _, buff in ipairs(player.buffs or {}) do
+        if burst_pacts.BLOCK[buff] then return nil end
+    end
+    if not rage_ready() then return nil end
+    local known = {}
+    for _, id in ipairs((windower.ffxi.get_abilities() or {}).job_abilities or {}) do known[id] = true end
+    local mp = player.vitals and player.vitals.mp or 0
+    return function(name)
+        local ja = res.job_abilities:with('en', name)
+        if ja and known[ja.id] and (ja.mp_cost or 0) <= mp then return ja end
+        return nil
+    end
+end
+
+local function pick_pact(chain, player)
+    local usable = usable_pacts(player)
+    if not usable then return nil end
+    for _, name in ipairs(burst_pacts.names_for(chain[2])) do
+        local ja = usable(name)
+        if ja then return ja end
+    end
+    return nil
+end
+
+-- Elements this character could burst with a pact right now (for the
+-- skillchain planner, so it saves Blood Pact: Rage for the burst).
+pact_burst_elements = function()
+    local list = {}
+    local player = windower.ffxi.get_player()
+    if not active or not player then return list end
+    local usable = usable_pacts(player)
+    if not usable then return list end
+    for element, names in pairs(burst_pacts.by_element) do
+        for _, name in ipairs(names) do
+            if usable(name) then list[#list + 1] = element; break end
+        end
+    end
+    table.sort(list)
+    return list
+end
+
 local function get_matching_target(target_id)
     local current = windower.ffxi.get_mob_by_target('t')
     if current and current.id == target_id then return '<t>' end
@@ -225,7 +303,26 @@ local function get_matching_target(target_id)
     return nil
 end
 
-local check_burst
+local check_burst, check_pact
+
+local function send_pact(token, chain, target, target_token, pact)
+    last_action = chain[1]..' -> '..pact.en..' (blood pact) on '..target.name
+    last_skip = 'None'
+    local label = 'Blood pact'
+    if burst and burst.token == token then
+        burst.attempts = burst.attempts + 1
+        if burst.attempts > 1 then label = 'Retrying' end
+        burst.sent = os.clock()
+        burst.spell = pact.en
+        burst.pact = true
+    end
+    message(colored(label, 167)..' '..colored(pact.en, 207)..colored(' on '..target.name..' ('..chain[1]..')', 0))
+    windower.send_command('input /pet "'..pact.en..'" '..target_token)
+    if burst and burst.token == token then
+        -- Always checked: an accepted pact is what allows a follow-up spell burst.
+        coroutine.schedule(function() check_pact(token, target.id, chain) end, retry_check)
+    end
+end
 
 local function try_burst(token, target_id, chain)
     if not active or token ~= sequence then return end
@@ -246,6 +343,12 @@ local function try_burst(token, target_id, chain)
         skip(chain[1]..': Target more than 20 yalms away')
         return
     end
+    local pact = pick_pact(chain, player)
+    if pact then
+        send_pact(token, chain, target, target_token, pact)
+        return
+    end
+    if burst and burst.token == token then burst.pact = nil end
     if disabled(player) then
         skip(chain[1]..': Character unable to cast')
         return
@@ -307,6 +410,38 @@ check_burst = function(token, target_id, chain)
         return
     end
     debug(chain[1]..': no cast started; retrying')
+    try_burst(token, target_id, chain)
+end
+
+-- A pact has no casting packet from us; Blood Pact: Rage going on recast is
+-- the sign it was accepted (the recast starts at the command).
+check_pact = function(token, target_id, chain)
+    local b = burst
+    if not active or token ~= sequence or not b or b.token ~= token or not b.pact then return end
+    if not rage_ready() then
+        b.pact = nil
+        b.casts = b.casts + 1
+        b.attempts = 0
+        debug(chain[1]..': blood pact accepted')
+        if multi_enabled and b.casts < max_bursts and window_left(b) >= 2.5 then
+            coroutine.schedule(function() try_burst(token, target_id, chain) end, after_cast_delay)
+        end
+        return
+    end
+    if not retry_enabled then b.pact = nil; return end
+    if os.clock() - failsafe_at < 1.5 and b.deferred ~= b.attempts then
+        b.deferred = b.attempts
+        debug(chain[1]..': Failsafe is re-sending; waiting')
+        coroutine.schedule(function() check_pact(token, target_id, chain) end, retry_check)
+        return
+    end
+    if b.attempts >= max_attempts or window_left(b) < 1.0 then
+        b.pact = nil
+        last_skip = chain[1]..': blood pact not accepted'
+        debug(last_skip)
+        return
+    end
+    debug(chain[1]..': blood pact not accepted; retrying')
     try_burst(token, target_id, chain)
 end
 
@@ -437,7 +572,8 @@ local function show_help()
     message(colored('Commands', 167)..colored(' - Auto bursting begins on load', 0))
     help_line(' help', 'Show commands')
     help_line(' status', 'Show state and latest skillchain/WS observation')
-    help_line(' on|off', 'Enable or disable automatic bursting')
+    help_line(' mb on|off', 'Magic burst attempts on this character (saved; same as //boom on|off)')
+    help_line(' pacts on|off', 'Burst with a magical blood pact first when an avatar is out (saved, on)')
     help_line(' debug on|off', 'Explain skillchain and casting decisions')
     help_line(' trace on|off', 'Show matching-target action message IDs for missed windows')
     help_line(' retry on|off', 'Re-send a burst the game refused (on)')
@@ -450,9 +586,11 @@ local function show_help()
 end
 local function show_status()
     message(colored('Status', 167)..' '..colored('v'.._addon.version, 0)..
-        colored(' | Auto ', 0)..state_color(active)..colored(' | Debug ', 0)..state_color(debug_enabled)..
+        colored(' | Magic bursts ', 0)..state_color(active)..colored(' | Debug ', 0)..state_color(debug_enabled)..
         colored(' | Trace ', 0)..state_color(trace_enabled))
     notice('Target:', '<t>/<bt> only | Delay: 0.9s | Duplicate filter: 0.20s')
+    message(colored('Blood pact bursts', 167)..' '..state_color(pacts_enabled)..
+        colored(burst_pacts and '' or ' (burst_pacts.lua missing)', 0))
     message(colored('Retry', 167)..' '..state_color(retry_enabled)..colored(' | Multiple ', 0)..state_color(multi_enabled)..
         colored(' | Bursts '..max_bursts..' | Window '..burst_window..'s', 0))
     notice('Skillchain:', last_skillchain)
@@ -466,7 +604,7 @@ windower.register_event('addon command', function(command, value, ...)
     command = command and command:lower() or 'help'
     -- Skillchain options also work without "sc": //boom target light
     local sc_words = { sc=true, target=true, targets=true, opener=true, openers=true,
-        hold=true, holdtp=true, steps=true, solo=true }
+        hold=true, holdtp=true, steps=true, solo=true, grace=true, preferbp=true }
     if sc_words[command] then
         if not sc_module then
             notice('Skillchains:', 'not loaded')
@@ -480,10 +618,21 @@ windower.register_event('addon command', function(command, value, ...)
         return
     end
     value = value and value:lower() or nil
+    if command == 'mb' and (value == 'on' or value == 'off' or value == nil) then
+        command = value or (active and 'off' or 'on')
+    end
     if command == 'on' or command == 'off' then
         active = command == 'on'
         sequence = sequence + 1
-        message(colored('Auto', 167)..' '..state_color(active))
+        burst = nil
+        boom_settings.mb = active
+        save_settings()
+        message(colored('Magic bursts', 167)..' '..state_color(active)..colored(active and '' or ' - skillchain coordination still runs (//boom sc off to stop it)', 0))
+    elseif command == 'pacts' then
+        pacts_enabled = value == 'on' or (value ~= 'off' and not pacts_enabled)
+        boom_settings.pacts = pacts_enabled
+        save_settings()
+        message(colored('Blood pact bursts', 167)..' '..state_color(pacts_enabled))
     elseif command == 'status' then
         show_status()
     elseif command == 'debug' or command == 'trace' then
@@ -530,5 +679,5 @@ windower.register_event('job change', function()
     sequence = sequence + 1
 end)
 
-message(colored('Auto', 167)..' '..state_color(active)..colored(' - Loaded; watching skillchains', 0)..
+message(colored('Magic bursts', 167)..' '..state_color(active)..colored(' - Loaded; watching skillchains', 0)..
     colored(' | Skillchains ', 0)..(sc_module and colored(sc_module.status_line(), 0) or colored('OFF', 167)))

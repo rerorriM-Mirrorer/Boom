@@ -134,6 +134,7 @@ function World:add_client(name, opts)
     client.me = { id = client.player.id, index = client.player.index, model_size = 1 }
     if opts.pet then client.pet = { id = 5000 + n, index = 500 + n, name = 'Ifrit' } end
     client.ws = opts.ws or {}
+    client.burst = opts.burst
     client.bp = opts.bp or {}
     client.in_party = opts.in_party ~= false
     if client.in_party then
@@ -198,6 +199,7 @@ function World:add_client(name, opts)
         windower = fake, res = res, data = data, settings = settings,
         now = function() return world.t end,
         schedule = function(fn, delay) world:at(delay, fn) end,
+        burst_elements = function() return client.burst or {} end,
         chat = {
             message = function(t) client.chats[#client.chats + 1] = t end,
             notice = function(h, t) client.chats[#client.chats + 1] = h .. ' ' .. t end,
@@ -215,7 +217,8 @@ local function standard_party(opts)
     local w = World.new()
     w:add_client('Clairvaux', { tp = 1200, ws = { 'Savage Blade', 'Vorpal Blade', 'Fast Blade' }, settings = opts.settings })
     w:add_client('Myrr', { tp = opts.myrr_tp or 1000, ws = { 'Wasp Sting', 'Gust Slash', 'Evisceration' }, settings = opts.settings })
-    w:add_client('Cioara', { tp = 0, engaged = false, pet = true, bp = { 'Flaming Crush', 'Predator Claws' }, settings = opts.settings })
+    w:add_client('Cioara', { tp = 0, engaged = false, pet = true, bp = { 'Flaming Crush', 'Predator Claws' },
+        settings = opts.settings, burst = opts.cioara_burst })
     return w
 end
 
@@ -488,6 +491,45 @@ check('a step waits once for Failsafe before re-sending', function()
     w:advance(18)
     assert(count(w.commands, '^Myrr') >= 2, 'Myrr never re-sent')
     assert(w.log[#w.log]:find('-> Light'), table.concat(w.log, ' | '))
+end)
+
+local function landing_times(w)
+    local times = {}
+    for _, line in ipairs(w.log) do times[#times + 1] = tonumber(line:match('^(%S+)')) end
+    return times
+end
+
+check('grace period: a continuation fires 1s after its window opens; grace 0 restores the 0.4s margin', function()
+    local w = standard_party()
+    w:advance(20)
+    local t = landing_times(w)
+    eq(#t, 3, table.concat(w.log, ' | '))
+    -- weapon skills land ~1s after input in the simulation: 3s delay + 1s grace + 1s
+    assert(t[2] - t[1] >= 4.95 and t[2] - t[1] < 5.2, 'step 2 gap ' .. (t[2] - t[1]))
+    local w0 = standard_party({ settings = { grace = 0 } })
+    w0:advance(20)
+    local t0 = landing_times(w0)
+    assert(t0[2] - t0[1] < 4.6, 'grace 0 gap ' .. (t0[2] - t0[1]))
+end)
+
+check('a long grace is capped so a blood pact still lands before the window closes', function()
+    local w = standard_party({ settings = { grace = 3 } })
+    w:advance(25)
+    assert(w.log[#w.log] and w.log[#w.log]:find('Flaming Crush %-> Light'), table.concat(w.log, ' | '))
+end)
+
+check('Blood Pact: Rage is kept for the burst after a chain the avatar can burst', function()
+    local w = standard_party({ cioara_burst = { 'Thunder' } }) -- Fragmentation bursts with Thunder/Wind
+    w:advance(20)
+    for i = 2, #w.log do
+        assert(not (w.log[i]:find('Cioara') and w.log[i - 1]:find('-> Fragmentation', 1, true)),
+            'pact used right after a burstable chain: ' .. table.concat(w.log, ' | '))
+    end
+    assert(w.log[#w.log]:find('-> Light'), table.concat(w.log, ' | '))
+    -- a burst element that doesn't fit the chain leaves the plan as before
+    local w2 = standard_party({ cioara_burst = { 'Fire' } })
+    w2:advance(20)
+    eq(#w2.log, 3, table.concat(w2.log, ' | '))
 end)
 
 print(passed .. ' coordinator simulation tests passed')

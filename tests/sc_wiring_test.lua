@@ -147,4 +147,20 @@ check('missing Trust data: skillchains off with a reason, bursting unaffected', 
     w.cmd('sc', 'status'); assert(w.has('NO DATA'))
 end)
 
+check('//boom mb off saves and stops bursting; skillchain settings still work; grace and preferbp shortcuts', function()
+    local w = boot(env.trust_root())
+    local saves = #w.saved
+    w.cmd('mb', 'off')
+    assert(#w.saved > saves, 'mb setting saved')
+    assert(w.has('Magic bursts</> <167>OFF'), table.concat(w.chats, '\n'))
+    w.emit('incoming chunk', 0x28, { category = 3, actor_id = 99, param = 42,
+        targets = { { id = w.mob.id, actions = { { add_effect_message = 295, message = 185, has_add_effect = true } } } } })
+    for _, fn in ipairs(w.scheduled) do fn() end
+    assert(#w.commands == 0, 'burst with mb off: ' .. tostring(w.commands[1]))
+    w.cmd('grace', '2'); assert(w.ipc[#w.ipc] == 'boomsc|set|grace|2', tostring(w.ipc[#w.ipc]))
+    w.cmd('sc', 'preferbp', 'off'); assert(w.ipc[#w.ipc] == 'boomsc|set|prefer_bp|false', tostring(w.ipc[#w.ipc]))
+    w.cmd('sc', 'status'); assert(w.has('Grace 2s'))
+    w.cmd('mb', 'on'); assert(w.has('Magic bursts</> <158>ON'))
+end)
+
 print(passed .. ' wiring tests passed')

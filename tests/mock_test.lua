@@ -22,8 +22,19 @@ local spells = {
     ['Banish II'] = {id=110,en='Banish II',levels={[3]=40},mp_cost=20},
 }
 for _, spell in pairs(spells) do known[spell.id]=true end
+-- Blood pacts (0.2.3): avatar out, known pacts and the Blood Pact: Rage recast (id 173).
+local pet = nil
+local pacts_known = {}
+local ja_recasts = {}
+local pacts = {
+    ['Blood Pact: Rage'] = {id=603, en='Blood Pact: Rage', recast_id=173},
+    ['Meteor Strike'] = {id=552, en='Meteor Strike', mp_cost=55},
+    ['Fire II'] = {id=549, en='Fire II', mp_cost=24},
+    ['Thunder IV'] = {id=628, en='Thunder IV', mp_cost=118},
+}
 package.preload['resources'] = function()
-    return {spells = {with=function(self,key,value) assert(key=='en'); return spells[value] end}}
+    return {spells = {with=function(self,key,value) assert(key=='en'); return spells[value] end},
+        job_abilities = {with=function(self,key,value) assert(key=='en'); return pacts[value] end}}
 end
 package.preload['packets'] = function() return {} end
 package.preload['chat'] = function()
@@ -36,7 +47,14 @@ _G.windower = {
         get_player=function() return player end,
         get_spells=function() return known end,
         get_spell_recasts=function() return recasts end,
+        get_abilities=function()
+            local ja = {}
+            for id in pairs(pacts_known) do ja[#ja + 1] = id end
+            return {job_abilities = ja}
+        end,
+        get_ability_recasts=function() return ja_recasts end,
         get_mob_by_target=function(which)
+            if which == 'pet' then return pet end
             if which == 't' and target_id == mob.id then return mob end
             if which == 'bt' and target_id == -1 then return mob end
             return nil
@@ -82,6 +100,7 @@ local function reset()
     events['zone change']()
     target_id = mob.id; mob.hpp=98; player.buffs={}; player.vitals.mp=80
     recasts={}; commands={}; scheduled={}; later={}
+    pet = nil; pacts_known = {}; ja_recasts = {}
     player.main_job_id = 4; player.sub_job_id = 5
     player.main_job_level = 20; player.sub_job_level = 10
     events['addon command']('on')
@@ -345,5 +364,47 @@ check('Failsafe re-sending gets the first try before Boom retries', function()
     run_later() -- still no cast after Failsafe's try: Boom retries
     assert(#commands == 2, 'Boom should retry after waiting: '..#commands)
     fake_time = fake_time + 2
+end)
+check('avatar out: a magical blood pact bursts before any spell', function()
+    reset(); pet = {id = 5000, name = 'Ifrit'}; pacts_known = {[552]=true, [549]=true}; player.vitals.mp = 30
+    fire(mob.id, 295); run_pending()   -- Liquefaction (Fire)
+    assert(commands[1] == 'input /pet "Fire II" <t>', tostring(commands[1]))  -- Meteor Strike: not enough MP
+    reset(); pet = {id = 5000, name = 'Ifrit'}; pacts_known = {[552]=true, [549]=true}; player.vitals.mp = 200
+    fire(mob.id, 295); run_pending()
+    assert(commands[1] == 'input /pet "Meteor Strike" <t>', tostring(commands[1]))
+end)
+check('accepted pact (recast started) is followed by a spell burst', function()
+    reset(); pet = {id = 5000}; pacts_known = {[552]=true}; player.vitals.mp = 200
+    fire(mob.id, 295); run_pending()
+    ja_recasts[173] = 60
+    run_later()   -- pact check: accepted, schedules the next burst
+    run_later()   -- next burst: pact on recast, so a spell
+    assert(commands[2] == 'input /ma "Fire II" <t>', tostring(commands[2]))
+end)
+check('refused pact is re-sent while Blood Pact: Rage stays ready', function()
+    reset(); pet = {id = 5000}; pacts_known = {[552]=true}; player.vitals.mp = 200
+    fire(mob.id, 295); run_pending(); run_later()
+    assert(commands[2] == 'input /pet "Meteor Strike" <t>', tostring(commands[2]))
+end)
+check('no pact for the chain element, recast, or pacts off: spells as before', function()
+    reset(); pet = {id = 5000}; pacts_known = {[628]=true}; player.vitals.mp = 200
+    fire(mob.id, 295); run_pending()   -- Thunder IV does not burst Fire
+    assert(commands[1] == 'input /ma "Fire II" <t>', tostring(commands[1]))
+    reset(); pet = {id = 5000}; pacts_known = {[552]=true}; ja_recasts[173] = 30; player.vitals.mp = 200
+    fire(mob.id, 295); run_pending()
+    assert(commands[1] == 'input /ma "Fire II" <t>', tostring(commands[1]))
+    reset(); pet = {id = 5000}; pacts_known = {[552]=true}; player.vitals.mp = 200
+    events['addon command']('pacts', 'off')
+    fire(mob.id, 295); run_pending()
+    assert(commands[1] == 'input /ma "Fire II" <t>', tostring(commands[1]))
+    events['addon command']('pacts', 'on')
+end)
+check('mb off stops burst attempts; mb on restores them', function()
+    reset(); events['addon command']('mb', 'off')
+    fire(mob.id, 295); run_pending()
+    assert(#commands == 0, 'burst while mb off')
+    events['addon command']('mb', 'on')
+    fire(mob.id, 292); run_pending()
+    assert(#commands == 1, 'no burst after mb on')
 end)
 print('All mock tests passed')

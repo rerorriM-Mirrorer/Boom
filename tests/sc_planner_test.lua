@@ -216,4 +216,26 @@ check('concurrent polls order by time, then name, then counter', function()
     assert(not protocol.poll_before('100.Myrr.2', '100.Myrr.1'))
 end)
 
+check('prefer_bp: a chain with a blood pact beats a higher-level weapon-skill chain; off restores level order', function()
+    local m = party()
+    m[3].abilities = { bp(544) } -- Punch (Liquefaction)
+    local a = plan(m, { max_steps = 2 })
+    local has_bp = false
+    for _, s in ipairs(a.steps) do if s.kind == 'bp' then has_bp = true end end
+    assert(has_bp, 'expected a blood pact: ' .. planner.describe(a))
+    local b = plan(m, { max_steps = 2, prefer_bp = false })
+    eq(b.chain, 'Distortion', planner.describe(b))
+end)
+
+check('a blood pact is not planned right after a skillchain its summoner would burst', function()
+    local m = party()
+    m[3].abilities = { bp(634) } -- Volt Strike continues Fusion into Light
+    local current = { step = 2, chain = 'Fusion' }
+    eq(plan(m, {}, current).steps[1].member, 'Cioara', 'no burst: pact continues')
+    m[3].burst = { 'Fire' }       -- Fusion = Fire/Light: Cioara bursts instead
+    eq(plan(m, {}, current).steps[1].member, 'Clairvaux', 'pact kept for the burst')
+    m[3].burst = { 'Thunder' }    -- can't burst Fusion: pact may continue
+    eq(plan(m, {}, current).steps[1].member, 'Cioara')
+end)
+
 print(passed .. ' planner tests passed')

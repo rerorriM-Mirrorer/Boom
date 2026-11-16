@@ -64,6 +64,8 @@ coordinator.default_settings = {
     min_tp = 1000,
     allow_bp = true,
     mixed = true,
+    prefer_bp = true,    -- a chain that uses a blood pact beats one that doesn't (before chain level)
+    grace = 1.0,         -- seconds after a continuation window opens before the next step fires
     targets = '',        -- comma list: Light,Fusion,Fire
     openers = '',        -- comma list: Savage Blade,Cioara:Flaming Crush
     announce = 'local',  -- local | party | off
@@ -146,6 +148,7 @@ function coordinator:options()
         openers = openers,
         allow_bp = s.allow_bp ~= false,
         mixed = s.mixed ~= false,
+        prefer_bp = s.prefer_bp ~= false,
     }
 end
 
@@ -291,7 +294,11 @@ function coordinator:build_offer(mob_id)
             list[#list + 1] = { kind = 'bp', id = id, ready = blocker == nil }
         end
     end
-    return { name = player.name, tp = player.vitals and player.vitals.tp or 0, abilities = list }
+    -- Elements this member would magic burst with a blood pact (Boom.lua decides;
+    -- empty when bursting or pact bursts are off). The planner then keeps
+    -- Blood Pact: Rage for the burst instead of a skillchain step.
+    local burst = self.env.burst_elements and self.env.burst_elements() or {}
+    return { name = player.name, tp = player.vitals and player.vitals.tp or 0, abilities = list, burst = burst }
 end
 
 function coordinator:offer_has_ready(offer)
@@ -485,14 +492,16 @@ function coordinator:on_ipc(message)
         end
         local offer = self:build_offer(mob)
         if offer then
-            self:send('offer', pid, me, offer.tp, protocol.encode_abilities(offer.abilities))
+            self:send('offer', pid, me, offer.tp, protocol.encode_abilities(offer.abilities),
+                table.concat(offer.burst or {}, ','))
         end
     elseif kind == 'offer' then
         local poll = self.poll
         local pid, name = f[1], f[2]
         if not poll or poll.pid ~= pid or poll.phase ~= 'offers' or not self:in_party(name) then return end
         if not poll.offers[name] then poll.order[#poll.order + 1] = name end
-        poll.offers[name] = { name = name, tp = tonumber(f[3]) or 0, abilities = protocol.decode_abilities(f[4]) }
+        poll.offers[name] = { name = name, tp = tonumber(f[3]) or 0, abilities = protocol.decode_abilities(f[4]),
+            burst = coordinator.split_list(f[5]) }
     elseif kind == 'busy' then
         if self.poll and self.poll.pid == f[1] then
             self:dbg(f[2] .. ' is busy with ' .. tostring(f[3]))
@@ -562,9 +571,30 @@ function coordinator:begin_plan(pid, mob, chain, steps, leader, continuing)
         self.w.send_command('input /p Skillchain: ' .. text)
     end
     local first_at = self:now()
-    if current and current.opens and current.opens > first_at then first_at = current.opens end
-    first_at = first_at + (current and (tonumber(self.settings.step_margin) or 0.4) or 0)
+    if current then
+        first_at = self:continue_at(current.opens, self.chains[mob], steps[1].kind)
+    end
     self:arm_step(1, first_at)
+end
+
+-- Seconds an action takes from input to landing (Inferred from the user's
+-- logs: blood pacts about 3s, weapon skills about 1s).
+local LANDS_AFTER = { ws = 1.0, bp = 3.0 }
+
+-- When to fire a step that continues a window opening at `opens`: the grace
+-- period after it opens (never less than step_margin, the latency allowance),
+-- but early enough that the action still lands before the window closes.
+function coordinator:continue_at(opens, chain, kind)
+    local now = self:now()
+    opens = math.max(opens or now, now)
+    local margin = tonumber(self.settings.step_margin) or 0.4
+    local grace = tonumber(self.settings.grace) or 1.0
+    local at = opens + math.max(margin, grace)
+    if chain and chain.expires then
+        local latest = chain.expires - (LANDS_AFTER[kind] or 1.0) - 0.5
+        at = math.min(at, latest)
+    end
+    return math.max(at, opens + margin, now)
 end
 
 -- "Skillchain: Cioara Poison Nails > Clairvaux Fast Blade = Distortion" with
@@ -746,7 +776,7 @@ function coordinator:check_plan(mob_id, actor, kind, id, hit, effect)
         self:end_plan(chain and chain.chain or plan.chain, false)
         return
     end
-    local at = self:now() + (step.delay or 3) + (tonumber(self.settings.step_margin) or 0.4)
+    local at = self:continue_at(self:now() + (step.delay or 3), chain, plan.steps[plan.index].kind)
     self:arm_step(plan.index, at)
 end
 
@@ -804,10 +834,10 @@ end
 ----------------------------------------------------------------------------
 -- settings and commands
 
-local BOOL_KEYS = { enabled=true, hold_for_three=true, allow_bp=true, mixed=true }
+local BOOL_KEYS = { enabled=true, hold_for_three=true, allow_bp=true, mixed=true, prefer_bp=true }
 local NUMBER_KEYS = { max_steps=true, hold_max_tp=true, min_tp=true, poll_window=true,
     ack_window=true, step_margin=true, step_timeout=true, retry_delay=true, solo_tp=true,
-    retry_interval=true, color_member=true, color_ability=true, color_chain=true }
+    retry_interval=true, grace=true, color_member=true, color_ability=true, color_chain=true }
 local TEXT_KEYS = { targets=true, openers=true, announce=true }
 
 function coordinator:apply_setting(key, value, from_ipc)

@@ -1,5 +1,19 @@
 # Boom testing log
 
+## Batch: 0.2.3-test8 - November 16, 2026 (America/Chicago)
+
+**User request:** (1) prefer available blood pacts (avatar out) over personal weapon skills and magic, for both skillchains and magic bursts; magic bursts take precedence over skillchain steps for Blood Pact: Rage; (2) an option to turn magic burst attempts off; (3) a grace period (default 1s) after a continuation window opens before continuing it, while coordination continues. Also asked: does a weapon skill opener still allow a burst afterward, and does continuing with a blood pact?
+
+- **Source / branch:** `test/bp-priority-grace` from `main` `3eaca89` (known-good 0.2.2-test7).
+- **Changes:** `burst_pacts.lua` (new, magical pacts by element). Boom.lua: pact before spell when an avatar is out and Blood Pact: Rage is ready; accepted when the recast starts (checked after 1s), then a follow-up spell burst; refused pacts re-sent like spells; `//boom mb on|off` and `//boom on|off` now saved in `data/settings.xml`; `//boom pacts on|off`. Planner: `prefer_bp` ranks blood-pact chains before chain level; a pact step right after a skillchain its summoner can burst is not planned (offers carry the summoner's burst elements, IPC field 5; older clients send none). Coordinator: continuation steps fire at window open + max(step_margin, grace), capped so the action lands 0.5s before the window closes (Inferred landing: WS 1s, BP 3s).
+- **Answers given:** an opener alone makes no skillchain, so there is nothing to burst until step 2 lands; after every step that makes a skillchain each Boom client (including the one who used the weapon skill) bursts as before. A blood pact continuation also makes a skillchain that everyone bursts; the summoner's own pact is then on recast, so it bursts with spells if it has any.
+- **Offline verification (not FFXI):** Lua 5.1: 42 burst checks (5 new), 25 planner (2 new), 24 simulation (3 new), 9 wiring (1 new); LuaJIT burst checks; all files parse.
+- **Inferred, confirm live:** magical blood pacts can Magic Burst and the element of each pact in `burst_pacts.lua`; `/pet "<pact>" <t>` targets the selected enemy; the recast starts within 1s of an accepted pact; `get_abilities().job_abilities` lists only the summoned avatar's pacts; pacts land about 3s after input.
+- **Live checks requested:** (1) Cioara with an avatar out on a skillchain of its element: `[Boom] Blood pact <pact>` then the game's `Magic Burst!` on the avatar's damage; then a spell burst if Cioara has one. (2) With the matching avatar, plans do not put Cioara's pact right after that skillchain; (3) `//boom sc status` shows Prefer BP ON and Grace 1s; real seconds between steps grow by about 0.6s; no step misses its window more than before. (4) `//boom mb off` on one character: no bursts there after `//lua reload Boom`, skillchains still run.
+- **Rollback:** reinstall the 0.2.2-test7 zip (main `3eaca89`), or `//boom pacts off`, `//boom sc preferbp off`, `//boom sc grace 0` to return each behavior to test7. Delete `data/settings.xml` to forget a saved `mb off`.
+
+---
+
 ## Current Development Status - November 16, 2026, promoted to main (America/Chicago)
 
 - **User confirmation (2026-11-16, 04:12):** after playing with 0.2.2-test7 (colors set live to light blue names 207, white abilities 0, green result 158), the user reports it "has been working very well" and calls it a known-good addon. On that confirmation, `test/sc-coordinator` (0.2.0-test5 through 0.2.2-test7 plus the color-default commits) is fast-forward merged into `main`. `main` is now the known-good version.

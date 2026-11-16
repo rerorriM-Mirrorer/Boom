@@ -1,4 +1,4 @@
-# Boom - Windower 4 (0.2.2-test7)
+# Boom - Windower 4 (0.2.3-test8)
 
 **Load it. Skillchain happens. Boom.** Boom automatically attempts one learned, job-usable, ready, affordable magic burst on the currently targeted enemy when it detects a skillchain. No activation or spell-tier setup required. This update **keeps the exact 0.9-second delay** that the user reported working in game.
 
@@ -18,7 +18,7 @@ Boom prints a color-formatted `[Boom] Casting ...` message on attempted bursts. 
 - For **Light**, a **WHM main job** tries its light spells first: `Holy II`, `Holy`, `Banish III`, `Banish II`, `Banish`. If Holy II is unavailable and the WHM knows Holy, the addon will attempt **Holy** on a Light skillchain (and other Light-compatible chains such as Fusion, Transfixion, and Radiance). This priority is retained even with a nuking support job. When no light spell is usable, it may use a compatible elemental spell from the support job instead.
 - For other main jobs, the original elemental order is unchanged; light spells remain available if no higher-priority eligible elemental spell is usable. On Dark properties, Drain-family spells remain eligible.
 
-Bursting itself never uses Blood Pacts, BST Ready moves, or PUP pet commands; it reacts to detected skillchain effects. Normal GearSwap spell interception remains in place. Making skillchains is the separate, optional coordinator below.
+**Blood pact bursts (0.2.3):** on a summoner with an avatar out and Blood Pact: Rage ready, Boom bursts with a magical blood pact of a matching element (for example Meteor Strike on Fusion) before trying any spell, on the same `<t>`/`<bt>` target. If the pact is accepted (the Blood Pact: Rage recast starts), a second burst follows with a spell when the window allows. The pact list is in `burst_pacts.lua` (stronger pacts first; edit freely). `//boom pacts off` goes back to spells only. Bursting never uses BST Ready moves or PUP pet commands; it reacts to detected skillchain effects. Normal GearSwap spell interception remains in place. Making skillchains is the separate, optional coordinator below.
 
 ## Skillchain coordinator (test5, not yet live-tested)
 
@@ -46,16 +46,23 @@ Settings changed on one character are sent to every Boom client and saved in `da
 - `//boom sc solo <n>|off` - when no chain is possible, a member at this TP weapon skills alone (default 3000)
 - Shortcuts: `//boom target ...`, `//boom opener ...`, `//boom hold ...`, `//boom steps ...`, `//boom solo ...` work without `sc`
 - `//boom sc bp on|off`, `//boom sc mixed on|off`, `//boom sc announce local|party|off`
+- `//boom sc preferbp on|off` - prefer chains that use a blood pact (on)
+- `//boom sc grace <sec>` - wait after a continuation window opens before the next step (1); shortcut `//boom grace <sec>`
 - `//boom sc set color_member|color_ability|color_chain <n>` - plan line colors (defaults: names 207 light blue, abilities 0 white, result 158 green, as seen on the user's screen)
-- `//boom sc set <key> <value>` - timing: `poll_window` 0.5, `ack_window` 0.7, `step_margin` 0.4, `step_timeout` 6, `retry_delay` 1.5 (seconds)
+- `//boom sc set <key> <value>` - timing: `poll_window` 0.5, `ack_window` 0.7, `step_margin` 0.4, `grace` 1, `step_timeout` 6, `retry_delay` 1.5 (seconds)
 
-Plan choice, in order: a requested target, a requested opener, the highest chain level, then more steps (each step is another magic-burst window). A chain that is already a requested target is not continued into one that isn't. `//boom debug on` adds `SC:` lines explaining polls, plans, refusals and aborts.
+Plan choice, in order: a requested target, a requested opener, chains that use a blood pact (`preferbp`, on), the highest chain level, then more steps (each step is another magic-burst window). With `preferbp` on, a lower-level chain that uses the avatar can win over a higher-level weapon-skill-only chain; `//boom sc preferbp off` puts chain level first again.
+
+**Burst before skillchain for blood pacts:** Blood Pact: Rage is one shared recast. When a summoner could burst a skillchain with a magical pact, the planner does not ask its avatar to continue that skillchain with a physical pact; the recast is kept for the burst. Openers and steps that don't follow a skillchain can still use the pact.
+
+**Grace period:** a step that continues a skillchain fires `grace` seconds (default 1) after its window opens, instead of right at the opening. Planning and confirmation between characters still happen during the wait. For a blood pact the wait is shortened when needed so the pact (about 3 seconds to land) still lands before the window closes. `//boom sc grace <0-4>`; `0` returns to the old 0.4-second margin. A chain that is already a requested target is not continued into one that isn't. `//boom debug on` adds `SC:` lines explaining polls, plans, refusals and aborts.
 
 ## Commands
 
 - `//boom` or `//boom help` — help
 - `//boom status` — version, activation, last attempted spell, last skip
-- `//boom on` / `//boom off` — enable or disable automatic bursting (on immediately after load)
+- `//boom mb on|off` (same as `//boom on` / `//boom off`) — magic burst attempts on this character. Saved in `data/settings.xml` since 0.2.3, so it stays off after a reload. Skillchain coordination keeps running; use `//boom sc off` for that.
+- `//boom pacts on|off` — burst with a magical blood pact first when an avatar is out (on, saved)
 - `//boom debug on` / `//boom debug off` — show detection, duplicate-event and skip explanations
 - `//boom trace on` / `//boom trace off` — verbose raw action message IDs for selected-target WS/magic/pet actions to investigate missing skillchain recognition (off by default)
 - `//boom retry on|off` - re-send a burst the game refused ("Unable to cast spells at this time"), up to 4 inputs inside the burst window (on)
@@ -66,7 +73,7 @@ Plan choice, in order: a requested target, a requested opener, the highest chain
 
 ## Limits and diagnosing a missed burst
 
-Boom attempts **one spell per detected skillchain**, not an unconditional guarantee of a successful burst. It only acts on a live, already-targeted monster within its conservative 20-yalm check, and does not override an action lock or another addon that has started a cast. On zoning, logout, and job change it cancels pending scheduled actions. A new load always starts in Auto.
+Boom attempts **one spell per detected skillchain**, not an unconditional guarantee of a successful burst. It only acts on a live, already-targeted monster within its conservative 20-yalm check, and does not override an action lock or another addon that has started a cast. On zoning, logout, and job change it cancels pending scheduled actions. A new load starts with the saved `mb` setting (on by default).
 
 If no cast occurs: run `//boom debug on` and `//boom status`. Debug (yellow details, standard [Boom] label) reports recognized chains, rejected/duplicate events, missing targets, and weapon-skill packets on the selected target that contain no recognized skillchain effect. If the game shows a burst window but debug has no corresponding chain, turn on `//boom trace on`, reproduce **one** missed level-2 window, and share the `category`, `action`, `additional`, `has_add` message values, target name, and the skillchain displayed by TargetSC. Turn trace back off afterward to keep the log quiet. Trace deliberately **does not** print every ordinary attack; it concentrates on relevant action categories and the currently selected target.
 
@@ -76,6 +83,7 @@ Boom continues to attempt one spell per detected skillchain, with the same **0.9
 
 ## Changelog
 
+- **0.2.3-test8 (2026-11-16)** - Summoners burst with a magical blood pact before spells; skillchain plans prefer blood pacts over weapon skills and keep Blood Pact: Rage for the burst when the avatar can burst the chain; `//boom mb on|off` (saved); 1-second grace period before continuing a skillchain (`//boom sc grace`).
 - **0.2.2-test7 (2026-11-16)** - The `Skillchain:` plan line shows characters, abilities and the result in three colors. Works alongside Failsafe (Broguypal fork): when Failsafe announces it will re-send a refused command, Boom waits a second before its own retry, so both don't send it.
 
 - **0.2.1-test6 (2026-11-16)** - Fixes from the first live session logs. Shield Bash (and other category-3 job abilities) no longer read as a weapon skill with the same number (Expiacion), which had broken plans and invented open chains. A blood pact is no longer cancelled by its own recast while the avatar is still readying it. Refused steps are re-sent every second until they start or the window closes; the leader's "continuing" decision is shared with everyone. New: solo release at 3000 TP; bursts are retried when refused and a second burst follows when the window allows (`retry`, `multi`, `bursts`, `window`); `//boom target ...` style shortcuts. First burst delay is still exactly 0.9 seconds.

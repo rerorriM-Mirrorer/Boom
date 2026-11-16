@@ -51,6 +51,7 @@ function boom_sc.init(helpers)
         now = os.clock,
         schedule = function(fn, delay) coroutine.schedule(fn, delay) end,
         chat = { message = ui.message, notice = ui.notice, debug = ui.debug, colored = ui.colored },
+        burst_elements = helpers.burst_elements,
     })
 
     windower.register_event('ipc message', function(message)
@@ -109,8 +110,10 @@ function boom_sc.help()
     help_line(' solo <n>|off', 'With no chain possible, weapon skill alone at this TP (default 3000)')
     help_line(' bp on|off', 'Include Blood Pact: Rage')
     help_line(' mixed on|off', 'Let one member give a weapon skill and a blood pact')
+    help_line(' preferbp on|off', 'Prefer chains that use a blood pact over weapon skills only (on)')
+    help_line(' grace <sec>', 'Wait after a continuation window opens before the next step (1)')
     help_line(' announce local|party|off', 'Where to show plans')
-    help_line(' set <key> <value>', 'Timing: poll_window, ack_window, step_margin, step_timeout, retry_delay, retry_interval')
+    help_line(' set <key> <value>', 'Timing: poll_window, ack_window, step_margin, grace, step_timeout, retry_delay, retry_interval')
     help_line(' set color_member|color_ability|color_chain <n>', 'Plan line colors (207 names, 0 abilities, 158 result)')
     help_line(' trust <folder>', 'Trust addon folder on this client (default ../Trust/)')
 end
@@ -120,7 +123,8 @@ local function bool_text(v) return ui.state_color(v) end
 function boom_sc.status()
     ui.message(colored('Skillchains', 167) .. ' ' .. (sc.data and bool_text(settings.enabled) or colored('NO DATA', 167)) ..
         colored(' | Steps ' .. tostring(settings.max_steps) .. ' | Hold ', 0) .. bool_text(settings.hold_for_three) ..
-        colored(' | BP ', 0) .. bool_text(settings.allow_bp ~= false) .. colored(' | Min TP ' .. tostring(settings.min_tp) ..
+        colored(' | BP ', 0) .. bool_text(settings.allow_bp ~= false) .. colored(' | Prefer BP ', 0) ..
+        bool_text(settings.prefer_bp ~= false) .. colored(' | Grace ' .. tostring(settings.grace) .. 's | Min TP ' .. tostring(settings.min_tp) ..
         ' | Solo ' .. ((tonumber(settings.solo_tp) or 0) > 0 and tostring(settings.solo_tp) or 'off'), 0))
     ui.notice('Targets:', settings.targets ~= '' and settings.targets or 'Any (best available)')
     ui.notice('Openers:', settings.openers ~= '' and settings.openers or 'Any')
@@ -162,6 +166,12 @@ function boom_sc.command(args, raw)
     elseif cmd == 'bp' then
         sc:set_everywhere('allow_bp', tostring(on_off(value, settings.allow_bp ~= false)))
         ui.message(colored('Blood pacts', 167) .. ' ' .. bool_text(settings.allow_bp))
+    elseif cmd == 'preferbp' then
+        sc:set_everywhere('prefer_bp', tostring(on_off(value, settings.prefer_bp ~= false)))
+        ui.message(colored('Prefer blood pacts', 167) .. ' ' .. bool_text(settings.prefer_bp))
+    elseif cmd == 'grace' and tonumber(value) and tonumber(value) >= 0 and tonumber(value) <= 4 then
+        sc:set_everywhere('grace', value)
+        ui.notice('Grace period:', value .. 's after a continuation window opens')
     elseif cmd == 'mixed' then
         sc:set_everywhere('mixed', tostring(on_off(value, settings.mixed ~= false)))
         ui.message(colored('Mixed WS + BP', 167) .. ' ' .. bool_text(settings.mixed))

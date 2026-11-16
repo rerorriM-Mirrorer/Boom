@@ -5,7 +5,11 @@
 -- unit-tested offline and moved into Trust unchanged.
 --
 -- Input
---   members = { { name=, tp=, abilities = { { kind='ws'|'bp', id=, name=, ready=bool }, ... } }, ... }
+--   members = { { name=, tp=, abilities = { { kind='ws'|'bp', id=, name=, ready=bool }, ... },
+--                 burst = { 'Fire', ... } }, ... }
+--             burst: elements the member would magic burst with a blood pact. A
+--             blood pact step right after a skillchain of one of those elements is
+--             not planned: Blood Pact: Rage is kept for the burst.
 --   current = nil, or { step=n, chain='Fusion' or nil, props={...} } for an open window
 --   options = see planner.default_options
 --   data    = adapter from sc/trust_data.lua
@@ -25,6 +29,7 @@ planner.default_options = {
     openers = {},           -- preferred openers: { {member=nil|'Name', ability='Savage Blade'} }
     allow_bp = true,        -- include Blood Pact: Rage
     mixed = true,           -- a member may give one weapon skill and one blood pact in a chain
+    prefer_bp = true,       -- a chain using a blood pact beats one that doesn't (ranked before chain level)
     solo_tp = 3000,         -- with no chain possible, a member at this TP weapon skills alone (0 = never)
 }
 
@@ -114,13 +119,32 @@ end
 local function score_plan(plan, options, data, fresh)
     local target = (#options.targets > 0 and matches_target(plan.chain, options.targets, data)) and 1 or 0
     local opener = (fresh and #options.openers > 0 and opener_matches(plan.steps[1], options.openers)) and 1 or 0
-    -- Order: requested property/element, requested opener, chain level, more
-    -- steps (each step is another magic burst window for Boom).
-    return { target, opener, data.level(plan.chain), #plan.steps }
+    local pacts = 0
+    if options.prefer_bp then
+        for _, s in ipairs(plan.steps) do if s.kind == 'bp' then pacts = pacts + 1 end end
+    end
+    -- Order: requested property/element, requested opener, blood pacts used
+    -- (saves weapon skill TP), chain level, more steps (each step is another
+    -- magic burst window for Boom).
+    return { target, opener, pacts, data.level(plan.chain), #plan.steps }
+end
+
+-- Would this member rather magic burst `chain` with a blood pact?
+local function saves_pact_for_burst(member_burst, chain, data)
+    if not chain or not member_burst or #member_burst == 0 then return false end
+    for _, e in ipairs(data.elements(chain)) do
+        local el = lower(e)
+        for _, b in ipairs(member_burst) do
+            local bl = lower(b)
+            if (element_aliases[bl] or bl) == (element_aliases[el] or el) then return true end
+        end
+    end
+    return false
 end
 
 -- Depth-first search over ordered ability sequences.
-local function search(candidates, current, options, data)
+local function search(candidates, current, options, data, bursts)
+    bursts = bursts or {}
     local best = nil
     local fresh = current == nil
     local start_step = current and current.step or 0
@@ -154,7 +178,9 @@ local function search(candidates, current, options, data)
                 else
                     made = data.combine_lists(prev_chain and { prev_chain } or prev_props, c.props)
                 end
-                if prev_props == nil or made then
+                -- A pact right after a skillchain the summoner can burst stays for the burst.
+                local reserved = c.kind == 'bp' and saves_pact_for_burst(bursts[c.member], prev_chain, data)
+                if (prev_props == nil or made) and not reserved then
                     used[s] = true
                     steps[#steps + 1] = {
                         member = c.member, kind = c.kind, id = c.id, name = c.name,
@@ -215,11 +241,13 @@ function planner.plan(input)
         current = nil -- closed chain: a new one starts from an opener
     end
 
+    local bursts = {}
+    for _, m in ipairs(input.members or {}) do bursts[m.name] = m.burst end
     local ready = candidate_list(input.members or {}, options, data, false)
-    local best = search(ready, current, options, data)
+    local best = search(ready, current, options, data, bursts)
 
     if current == nil and options.hold_for_three and options.max_steps >= 3 then
-        local potential = search(candidate_list(input.members or {}, options, data, true), nil, options, data)
+        local potential = search(candidate_list(input.members or {}, options, data, true), nil, options, data, bursts)
         local best_steps = best and #best.steps or 0
         if potential and #potential.steps >= 3 and best_steps < 3 then
             local capped = false
