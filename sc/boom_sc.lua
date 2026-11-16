@@ -61,6 +61,12 @@ function boom_sc.init(helpers)
         local ok, packet = pcall(windower.packets.parse_action, data_bytes)
         if ok and packet then sc:on_action(packet) end
     end)
+    windower.register_event('incoming text', function(original)
+        if type(original) == 'string' and (original:find('was refused. Waiting for readiness.', 1, true)
+            or original:find('was unsuccessful. Retrying.', 1, true)) then
+            sc.failsafe_at = os.clock()
+        end
+    end)
     windower.register_event('prerender', function()
         sc:tick()
     end)
@@ -105,6 +111,7 @@ function boom_sc.help()
     help_line(' mixed on|off', 'Let one member give a weapon skill and a blood pact')
     help_line(' announce local|party|off', 'Where to show plans')
     help_line(' set <key> <value>', 'Timing: poll_window, ack_window, step_margin, step_timeout, retry_delay, retry_interval')
+    help_line(' set color_member|color_ability|color_chain <n>', 'Plan line colors (158, 207, 200)')
     help_line(' trust <folder>', 'Trust addon folder on this client (default ../Trust/)')
 end
 

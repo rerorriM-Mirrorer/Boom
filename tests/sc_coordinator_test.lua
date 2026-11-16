@@ -460,4 +460,34 @@ check('below the solo TP nothing fires alone; solo off never releases', function
     eq(#w2.commands, 0)
 end)
 
+check('plan line colors character, ability and result differently', function()
+    local w = World.new()
+    local c = w:add_client('Clairvaux', { tp = 1000, ws = { 'Savage Blade' } })
+    c.sc.env.chat.colored = function(v, color) return '<' .. color .. '>' .. tostring(v) .. '</>' end
+    local line = c.sc:colored_plan({ { member = 'Cioara', name = 'Poison Nails' }, { member = 'Clairvaux', name = 'Fast Blade' } }, 'Distortion')
+    eq(line, '<167>Skillchain:</> <158>Cioara</> <207>Poison Nails</><0> > </><158>Clairvaux</> <207>Fast Blade</><0> = </><200>Distortion</>')
+    c.settings.color_member = 5
+    assert(c.sc:colored_plan({ { member = 'Myrr', name = 'Brainshaker' } }, nil):find('<5>Myrr</>.*<200> %(solo%)</>'))
+end)
+
+check('a step waits once for Failsafe before re-sending', function()
+    local w = standard_party()
+    local myrr = w.by_name['Myrr']
+    local perform = w.perform
+    local refused = false
+    w.perform = function(self, client, kind, id, target)
+        if client == myrr and not refused then
+            refused = true
+            myrr.sc.failsafe_at = w.t -- Failsafe announced it will re-send
+            return
+        end
+        return perform(self, client, kind, id, target)
+    end
+    w:advance(1.2)
+    eq(count(w.commands, '^Myrr'), 1, 'Myrr re-sent too early: ' .. table.concat(w.commands, ' | '))
+    w:advance(18)
+    assert(count(w.commands, '^Myrr') >= 2, 'Myrr never re-sent')
+    assert(w.log[#w.log]:find('-> Light'), table.concat(w.log, ' | '))
+end)
+
 print(passed .. ' coordinator simulation tests passed')

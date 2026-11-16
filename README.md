@@ -1,4 +1,4 @@
-# Boom - Windower 4 (0.2.1-test6)
+# Boom - Windower 4 (0.2.2-test7)
 
 **Load it. Skillchain happens. Boom.** Boom automatically attempts one learned, job-usable, ready, affordable magic burst on the currently targeted enemy when it detects a skillchain. No activation or spell-tier setup required. This update **keeps the exact 0.9-second delay** that the user reported working in game.
 
@@ -31,6 +31,8 @@ Load Boom on **every** character in the party. When a character is ready (1000+ 
 - If no chain is possible, nothing is fired until a member reaches the solo TP (3000 by default), which then uses its best weapon skill alone.
 - A step the game refuses ("Unable to use weapon skill") is re-sent every second until the action starts or the window gets too short.
 
+**With Failsafe loaded:** both can re-send a refused command. Failsafe tries once when the character looks ready and prints "... was refused. Waiting for readiness."; Boom sees that line and waits one more second before trying itself. Keep Failsafe's `notify` on so Boom can see it.
+
 Settings changed on one character are sent to every Boom client and saved in `data/sc_settings.xml`.
 
 - `//boom sc` or `//boom sc status` - settings, Trust data folder, last plan and result
@@ -44,6 +46,7 @@ Settings changed on one character are sent to every Boom client and saved in `da
 - `//boom sc solo <n>|off` - when no chain is possible, a member at this TP weapon skills alone (default 3000)
 - Shortcuts: `//boom target ...`, `//boom opener ...`, `//boom hold ...`, `//boom steps ...`, `//boom solo ...` work without `sc`
 - `//boom sc bp on|off`, `//boom sc mixed on|off`, `//boom sc announce local|party|off`
+- `//boom sc set color_member|color_ability|color_chain <n>` - plan line colors (character 158 green, ability 207 yellow, result 200)
 - `//boom sc set <key> <value>` - timing: `poll_window` 0.5, `ack_window` 0.7, `step_margin` 0.4, `step_timeout` 6, `retry_delay` 1.5 (seconds)
 
 Plan choice, in order: a requested target, a requested opener, the highest chain level, then more steps (each step is another magic-burst window). A chain that is already a requested target is not continued into one that isn't. `//boom debug on` adds `SC:` lines explaining polls, plans, refusals and aborts.
@@ -72,6 +75,8 @@ A skillchain effect can be present in the action's additional-effect message or,
 Boom continues to attempt one spell per detected skillchain, with the same **0.9-second casting delay**. It doesn't move or retarget your character, and normal spell-eligibility checks still apply. The default chat output is quiet; debug and trace are explicit opt-ins. Chat output follows the shared FFXI addon convention: `[Boom]` label color 200; headings 167; syntax 207; ordinary descriptions/values 0; ON green 158; OFF red 167; ASCII hyphens only. By user preference, **Debug details use readable yellow color 207** instead of neutral white; Trace and ordinary details stay white.
 
 ## Changelog
+
+- **0.2.2-test7 (2026-11-16)** - The `Skillchain:` plan line shows characters, abilities and the result in three colors. Works alongside Failsafe (Broguypal fork): when Failsafe announces it will re-send a refused command, Boom waits a second before its own retry, so both don't send it.
 
 - **0.2.1-test6 (2026-11-16)** - Fixes from the first live session logs. Shield Bash (and other category-3 job abilities) no longer read as a weapon skill with the same number (Expiacion), which had broken plans and invented open chains. A blood pact is no longer cancelled by its own recast while the avatar is still readying it. Refused steps are re-sent every second until they start or the window closes; the leader's "continuing" decision is shared with everyone. New: solo release at 3000 TP; bursts are retried when refused and a second burst follows when the window allows (`retry`, `multi`, `bursts`, `window`); `//boom target ...` style shortcuts. First burst delay is still exactly 0.9 seconds.
 

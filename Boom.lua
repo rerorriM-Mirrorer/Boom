@@ -3,7 +3,7 @@
 -- coordinator (sc/, //boom sc) uses weapon skills and Blood Pact: Rage.
 _addon.name = 'Boom'
 _addon.author = 'A'
-_addon.version = '0.2.1-test6'
+_addon.version = '0.2.2-test7'
 _addon.commands = {'boom'}
 _addon.windower = '4'
 
@@ -40,6 +40,17 @@ local burst_window = 7.0     -- Inferred: seconds after the skillchain a burst s
 local after_cast_delay = 0.6 -- pause after our cast finishes before the next burst
 local INTERRUPTED = 28787
 local burst = nil            -- { token, mob, chain, detected, casts, attempts, sent, casting }
+
+-- Failsafe (Broguypal fork) also re-sends refused commands, once, when the
+-- character looks ready, and says "... was refused. Waiting for readiness."
+-- When it does, Boom waits one more second before re-sending itself.
+local failsafe_at = -100
+windower.register_event('incoming text', function(original)
+    if type(original) == 'string' and (original:find('was refused. Waiting for readiness.', 1, true)
+        or original:find('was unsuccessful. Retrying.', 1, true)) then
+        failsafe_at = os.clock()
+    end
+end)
 
 -- Element sets follow FFXI magic-burst properties; order is a preference,
 -- not a claim about the target's resistances or the strongest possible damage.
@@ -279,6 +290,12 @@ check_burst = function(token, target_id, chain)
     local b = burst
     if not active or token ~= sequence or not b or b.token ~= token then return end
     if b.casting or (b.began and b.sent and b.began >= b.sent) then return end
+    if os.clock() - failsafe_at < 1.5 and b.deferred ~= b.attempts then
+        b.deferred = b.attempts
+        debug(chain[1]..': Failsafe is re-sending; waiting')
+        coroutine.schedule(function() check_burst(token, target_id, chain) end, retry_check)
+        return
+    end
     if b.attempts >= max_attempts then
         last_skip = chain[1]..': cast not accepted after '..b.attempts..' tries'
         debug(last_skip)

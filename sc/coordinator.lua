@@ -73,6 +73,9 @@ coordinator.default_settings = {
     step_timeout = 6,
     retry_delay = 1.5,
     solo_tp = 3000,      -- release alone at this TP when no chain is possible (0 = never)
+    color_member = 158,  -- plan line colors: character name
+    color_ability = 207, --   weapon skill / blood pact
+    color_chain = 200,   --   skillchain result
     retry_interval = 1.0,
     trust_path = '',
 }
@@ -553,7 +556,7 @@ function coordinator:begin_plan(pid, mob, chain, steps, leader, continuing)
     local involved = false
     for _, s in ipairs(steps) do if s.member == me then involved = true end end
     if self.settings.announce ~= 'off' and (involved or leader == me) then
-        self:note('Skillchain:', text)
+        self.env.chat.message(self:colored_plan(steps, chain))
     end
     if self.settings.announce == 'party' and leader == me then
         self.w.send_command('input /p Skillchain: ' .. text)
@@ -562,6 +565,32 @@ function coordinator:begin_plan(pid, mob, chain, steps, leader, continuing)
     if current and current.opens and current.opens > first_at then first_at = current.opens end
     first_at = first_at + (current and (tonumber(self.settings.step_margin) or 0.4) or 0)
     self:arm_step(1, first_at)
+end
+
+-- "Skillchain: Cioara Poison Nails > Clairvaux Fast Blade = Distortion" with
+-- names, abilities and the result in three colors (settings color_*).
+function coordinator:colored_plan(steps, chain)
+    local c = self.env.chat.colored
+    local s = self.settings
+    local parts = {}
+    for _, step in ipairs(steps) do
+        parts[#parts + 1] = c(step.member, tonumber(s.color_member) or 158) .. ' ' ..
+            c(step.name, tonumber(s.color_ability) or 207)
+    end
+    local result
+    if chain == nil or chain == '' then
+        result = c(' (solo)', tonumber(s.color_chain) or 200)
+    else
+        result = c(' = ', 0) .. c(chain, tonumber(s.color_chain) or 200)
+    end
+    return c('Skillchain:', 167) .. ' ' .. table.concat(parts, c(' > ', 0)) .. result
+end
+
+-- Failsafe (Broguypal fork) prints "... was refused. Waiting for readiness."
+-- and re-sends once when the character is ready. Give it the first try so
+-- both addons don't re-send the same command.
+function coordinator:failsafe_retrying()
+    return self:now() - (self.failsafe_at or -100) < 1.5
 end
 
 function coordinator:arm_step(index, at)
@@ -599,6 +628,12 @@ function coordinator:fire(pid, index, attempt)
     if attempt > 1 then
         if plan.started then return end                          -- action began; wait for it
         if self:now() >= (plan.window_end or 0) then return end  -- timeout will release
+        if self:failsafe_retrying() and plan.deferred ~= attempt then
+            plan.deferred = attempt
+            self:dbg('Failsafe is re-sending; waiting')
+            self.env.schedule(function() self:fire(pid, index, attempt) end, 1.0)
+            return
+        end
     end
     local ok, why = self:validate_step(plan.mob, step)
     if not ok then
@@ -772,7 +807,7 @@ end
 local BOOL_KEYS = { enabled=true, hold_for_three=true, allow_bp=true, mixed=true }
 local NUMBER_KEYS = { max_steps=true, hold_max_tp=true, min_tp=true, poll_window=true,
     ack_window=true, step_margin=true, step_timeout=true, retry_delay=true, solo_tp=true,
-    retry_interval=true }
+    retry_interval=true, color_member=true, color_ability=true, color_chain=true }
 local TEXT_KEYS = { targets=true, openers=true, announce=true }
 
 function coordinator:apply_setting(key, value, from_ipc)

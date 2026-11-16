@@ -1,5 +1,16 @@
 # Boom testing log
 
+## Current Development Status - November 16, 2026, test7 (America/Chicago)
+
+- **Source / branch:** `test/sc-coordinator`, after test6.
+- **User report:** test6 "working so far" and well liked. Requested distinct colors in the skillchain plan line, and a check of how Boom works with Failsafe.
+- **Failsafe review (user's zip, `rerorriM-Mirrorer/Broguypal-Addons` fork, Failsafe 1.1.1-dev, `mode ready`):** it records every outgoing `/ma`, `/ws`, `/pet` (as JA) line, including Boom's `input` commands. On "Unable to ..." text or matching 0x029 messages it waits for readiness (not casting, recast 0, TP 1000+, 0.35s minimum) and re-sends once, within 4 seconds. Its re-send starts a cast or weapon skill, which Boom sees and stops retrying. Overlap: if Boom's 1-second check runs before Failsafe's re-send shows up, both send; the extra input is refused and harmless (a weapon skill uses all TP and blood pacts start a recast, so it can't fire twice).
+- **Change in 0.2.2-test7:** Boom and the coordinator watch for Failsafe's "was refused. Waiting for readiness." / "was unsuccessful. Retrying." lines; within 1.5 seconds of one, Boom delays its next re-send by one check (1s) once. Requires Failsafe `notify` on (its default). Plan line: `Skillchain:` 167, character 158, ability 207, ` > ` and ` = ` 0, result 200; changeable with `//boom sc set color_member|color_ability|color_chain <n>`.
+- **Offline verification:** Lua 5.1: 37 burst checks, 23 planner, 21 simulation, 8 wiring; LuaJIT burst checks. Not FFXI.
+- **Live checks pending:** the plan line colors are readable in Cioara's chat; with Failsafe loaded, a refused burst shows Failsafe's line and then at most one more Boom "Retrying".
+
+---
+
 ## Current Development Status - November 16, 2026, test6 (America/Chicago)
 
 - **Source / branch:** `rerorriM-Mirrorer/Boom`, branch `test/sc-coordinator` (test6 commit follows test5). `main` still holds the 0.1.3-test4 baseline.

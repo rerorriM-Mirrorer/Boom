@@ -336,4 +336,14 @@ check('a new skillchain cancels pending retries for the old one', function()
     run_later()              -- old retry must not fire
     assert(#commands == 1, 'stale retry: '..tostring(commands[2]))
 end)
+check('Failsafe re-sending gets the first try before Boom retries', function()
+    reset(); events['addon command']('debug', 'on'); fire(mob.id, 295); run_pending()
+    events['incoming text']('Spell was refused. Waiting for readiness.')
+    run_later()
+    assert(#commands == 1, 'Boom re-sent while Failsafe was retrying')
+    assert(chats_contain('Failsafe is re-sending'))
+    run_later() -- still no cast after Failsafe's try: Boom retries
+    assert(#commands == 2, 'Boom should retry after waiting: '..#commands)
+    fake_time = fake_time + 2
+end)
 print('All mock tests passed')
