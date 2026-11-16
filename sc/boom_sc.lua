@@ -100,10 +100,11 @@ function boom_sc.help()
     help_line(' target <list>|clear', 'Prefer properties/elements, e.g. Light,Fusion,Fire')
     help_line(' opener <list>|clear', 'Prefer openers, e.g. Savage Blade,Cioara:Flaming Crush')
     help_line(' tp <n>', 'Minimum TP to weapon skill (default 1000)')
+    help_line(' solo <n>|off', 'With no chain possible, weapon skill alone at this TP (default 3000)')
     help_line(' bp on|off', 'Include Blood Pact: Rage')
     help_line(' mixed on|off', 'Let one member give a weapon skill and a blood pact')
     help_line(' announce local|party|off', 'Where to show plans')
-    help_line(' set <key> <value>', 'Timing: poll_window, ack_window, step_margin, step_timeout, retry_delay')
+    help_line(' set <key> <value>', 'Timing: poll_window, ack_window, step_margin, step_timeout, retry_delay, retry_interval')
     help_line(' trust <folder>', 'Trust addon folder on this client (default ../Trust/)')
 end
 
@@ -112,7 +113,8 @@ local function bool_text(v) return ui.state_color(v) end
 function boom_sc.status()
     ui.message(colored('Skillchains', 167) .. ' ' .. (sc.data and bool_text(settings.enabled) or colored('NO DATA', 167)) ..
         colored(' | Steps ' .. tostring(settings.max_steps) .. ' | Hold ', 0) .. bool_text(settings.hold_for_three) ..
-        colored(' | BP ', 0) .. bool_text(settings.allow_bp ~= false) .. colored(' | Min TP ' .. tostring(settings.min_tp), 0))
+        colored(' | BP ', 0) .. bool_text(settings.allow_bp ~= false) .. colored(' | Min TP ' .. tostring(settings.min_tp) ..
+        ' | Solo ' .. ((tonumber(settings.solo_tp) or 0) > 0 and tostring(settings.solo_tp) or 'off'), 0))
     ui.notice('Targets:', settings.targets ~= '' and settings.targets or 'Any (best available)')
     ui.notice('Openers:', settings.openers ~= '' and settings.openers or 'Any')
     ui.notice('Trust data:', sc.data and tostring(sc.data.root) or tostring(load_error))
@@ -144,6 +146,9 @@ function boom_sc.command(args, raw)
     elseif cmd == 'holdtp' and tonumber(value) then
         sc:set_everywhere('hold_max_tp', value)
         ui.notice('Hold TP cap:', value)
+    elseif cmd == 'solo' and (value == 'off' or tonumber(value)) then
+        sc:set_everywhere('solo_tp', value == 'off' and '0' or value)
+        ui.notice('Solo release:', value == 'off' and 'off' or (value .. ' TP'))
     elseif cmd == 'tp' and tonumber(value) then
         sc:set_everywhere('min_tp', value)
         ui.notice('Minimum TP:', value)

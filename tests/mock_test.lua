@@ -48,9 +48,20 @@ _G.windower = {
     add_to_chat=function(channel, s) table.insert(chats, {channel=channel, text=s}) end,
     send_command=function(s) table.insert(commands, s) end,
 }
+-- 0.9s = the live-confirmed burst delay; 1.0 = retry check; 0.6 = after-cast pause.
+local later = {}
 coroutine.schedule = function(fn, delay)
-    assert(delay == 0.9, 'working burst delay changed: '..tostring(delay))
-    table.insert(scheduled, fn)
+    if delay == 0.9 then
+        table.insert(scheduled, fn)
+    else
+        assert(delay == 1.0 or delay == 0.6, 'unexpected schedule delay: '..tostring(delay))
+        table.insert(later, {fn = fn, delay = delay})
+    end
+end
+local function run_later()
+    local tasks = later
+    later = {}
+    for _, task in ipairs(tasks) do task.fn() end
 end
 local function fire(id, effect, category, message_id)
     events['incoming chunk'](0x28, {category=category or 3,targets={{id=id,actions={{add_effect_message=effect,message=message_id or 185,has_add_effect=effect~=nil}}}}})
@@ -70,7 +81,7 @@ local function reset()
     fake_time = fake_time + 5
     events['zone change']()
     target_id = mob.id; mob.hpp=98; player.buffs={}; player.vitals.mp=80
-    recasts={}; commands={}; scheduled={}
+    recasts={}; commands={}; scheduled={}; later={}
     player.main_job_id = 4; player.sub_job_id = 5
     player.main_job_level = 20; player.sub_job_level = 10
     events['addon command']('on')
@@ -268,5 +279,61 @@ check('normal restart and unload are single-dispatch with notifications', functi
     assert(chats_contain('Reloading Boom'))
     reset();events['addon command']('unload'); assert(#commands==1 and commands[1]=='lua unload Boom')
     assert(chats_contain('Unloading Boom'))
+end)
+-- 0.2.1 retry and multiple bursts
+local function own(category, param)
+    events['incoming chunk'](0x28, {category=category, actor_id=player.id, param=param, targets={}})
+end
+check('first burst still at exactly 0.9s; refused cast is re-sent', function()
+    reset(); fire(mob.id, 295); run_pending()
+    assert(commands[1] == 'input /ma "Fire II" <t>', tostring(commands[1]))
+    run_later() -- no casting packet arrived
+    assert(commands[2] == 'input /ma "Fire II" <t>', 'retry: '..tostring(commands[2]))
+    assert(chats_contain('Retrying'), 'retry should be announced')
+end)
+check('no retry once our cast has started', function()
+    reset(); fire(mob.id, 295); run_pending()
+    own(8, 24931); run_later()
+    assert(#commands == 1, 'extra input: '..tostring(commands[2]))
+end)
+check('retries stop after four inputs', function()
+    reset(); fire(mob.id, 295); run_pending()
+    for _ = 1, 6 do run_later() end
+    assert(#commands == 4, 'inputs: '..#commands)
+end)
+check('retries stop when the burst window has passed', function()
+    reset(); fire(mob.id, 295); run_pending()
+    fake_time = fake_time + 6.5
+    run_later()
+    assert(#commands == 1, 'late retry: '..tostring(commands[2]))
+end)
+check('second burst after the first cast finishes, using the next ready spell', function()
+    reset(); fire(mob.id, 295); run_pending()
+    own(8, 24931); recasts[102] = 10; own(4, 102)
+    run_later()
+    assert(commands[2] == 'input /ma "Fire" <t>', 'second burst: '..tostring(commands[2]))
+    assert(chats_contain('Bursting again'))
+    own(8, 24931); own(4, 101); run_later()
+    assert(#commands == 2, 'only two bursts per step by default')
+end)
+check('interrupted cast is retried', function()
+    reset(); fire(mob.id, 295); run_pending()
+    own(8, 28787); run_later()
+    local resent = 0
+    for _, c in ipairs(commands) do if c == 'input /ma "Fire II" <t>' then resent = resent + 1 end end
+    assert(resent >= 2, 'interrupted cast not retried')
+end)
+check('retry off and multi off restore one attempt per skillchain', function()
+    reset(); events['addon command']('retry', 'off'); events['addon command']('multi', 'off')
+    fire(mob.id, 295); run_pending(); own(8, 24931); own(4, 102); run_later()
+    assert(#commands == 1, 'inputs: '..#commands)
+    events['addon command']('retry', 'on'); events['addon command']('multi', 'on')
+end)
+check('a new skillchain cancels pending retries for the old one', function()
+    reset(); fire(mob.id, 295); run_pending()
+    fake_time = fake_time + 1
+    fire(mob.id, 292)        -- Distortion arrives before the retry check
+    run_later()              -- old retry must not fire
+    assert(#commands == 1, 'stale retry: '..tostring(commands[2]))
 end)
 print('All mock tests passed')

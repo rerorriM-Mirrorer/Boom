@@ -25,3 +25,9 @@ Action: detect skillchain effects applied to an NPC and queue a single burst on 
 - **Chain state** is tracked per mob like Trust's `SkillchainTracker`: an effect id in Boom's table makes the next step (upgraded through Trust's matrix, e.g. Light after Light), otherwise the action restarts at step 1.
 - **No packet injection.** Actions are sent as chat input: `/ws "Name" <mob id>`, `/pet "Name" <mob id>`.
 - **IPC (not packets):** `boomsc|poll|offer|plan|ack|go|abort|busy|result|set|...` lines between Boom clients on the same PC. Confidence on the category 13 `param` mapping is low until a live capture: Windower's `actions.lua` maps avatar finishes to `job_abilities`, which matches Trust's `skills.job_abilities` ids.
+
+## Test 6 - from the user's 2026-11-16 logs (chat logs, not packet captures)
+
+- **Category 3 is not only weapon skills.** Every "Unexpected Clairvaux Expiacion" in test5 followed `[Clairvaux] Shield Bash`. Shield Bash is job ability 46 and Expiacion is weapon skill 46; the action category is the same, the message type differs (110 = uses an ability). test6 ignores category 3 with messages 110/317. Confidence high from log order; a trace capture would confirm the exact message id.
+- **Readying packets:** test6 treats category 7 (weapon skill / avatar readying) and, for blood pacts, category 6 from the actor or its avatar as "step started"; param 28787 = interrupted. Inferred from Windower actions.lua, not captured.
+- **Own casting packets for bursts:** category 8 (begin; 28787 interrupted) and 4 (finish) with `actor_id` = player id. Inferred; the log's "Unable to cast spells at this time" has no packet, so a missing category 8 within 1s is read as refused.

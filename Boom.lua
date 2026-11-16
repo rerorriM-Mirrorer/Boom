@@ -3,7 +3,7 @@
 -- coordinator (sc/, //boom sc) uses weapon skills and Blood Pact: Rage.
 _addon.name = 'Boom'
 _addon.author = 'A'
-_addon.version = '0.2.0-test5'
+_addon.version = '0.2.1-test6'
 _addon.commands = {'boom'}
 _addon.windower = '4'
 
@@ -25,6 +25,21 @@ local last_ws_packet = 'None'
 -- small fraction of a second. Whole-second os.time() comparisons used to
 -- swallow legitimate repeated skillchains for almost two seconds.
 local duplicate_window = 0.20
+
+-- Retry and follow-up bursts (0.2.1). The first cast still goes at exactly
+-- +0.9s. If the game does not start our cast (seen live: "Unable to cast
+-- spells at this time" right after Cioara's own weapon skill or blood pact),
+-- Boom re-sends while the burst window lasts. After a cast lands it may cast
+-- one more burst on the same skillchain.
+local retry_enabled = true
+local multi_enabled = true
+local max_bursts = 2         -- casts per skillchain step
+local max_attempts = 4       -- inputs per cast
+local retry_check = 1.0      -- seconds to wait for our casting packet
+local burst_window = 7.0     -- Inferred: seconds after the skillchain a burst still counts
+local after_cast_delay = 0.6 -- pause after our cast finishes before the next burst
+local INTERRUPTED = 28787
+local burst = nil            -- { token, mob, chain, detected, casts, attempts, sent, casting }
 
 -- Element sets follow FFXI magic-burst properties; order is a preference,
 -- not a claim about the target's resistances or the strongest possible damage.
@@ -199,8 +214,11 @@ local function get_matching_target(target_id)
     return nil
 end
 
+local check_burst
+
 local function try_burst(token, target_id, chain)
     if not active or token ~= sequence then return end
+    if burst and burst.token == token and burst.casting then return end
     local player = windower.ffxi.get_player()
     local target = windower.ffxi.get_mob_by_id(target_id)
     if not player or not target or not target.valid_target or not target.is_npc
@@ -224,15 +242,84 @@ local function try_burst(token, target_id, chain)
     local spell = pick_spell(chain, player)
     if not spell then
         last_skip = chain[1]..': No learned, job-usable, ready, affordable matching spell'
-        notice('Skipped:', last_skip)
+        if burst and burst.token == token and burst.casts > 0 then
+            debug(last_skip..' for another burst')
+        else
+            notice('Skipped:', last_skip)
+        end
         return
     end
     -- No targeting injection. The verified <t> or <bt> is resolved at dispatch.
     -- Input starts one cast; FFXI/GearSwap remains responsible for completion.
     last_action = chain[1]..' -> '..spell.en..' on '..target.name
     last_skip = 'None'
-    message(colored('Casting', 167)..' '..colored(spell.en, 207)..colored(' on '..target.name..' ('..chain[1]..')', 0))
+    local attempt = 1
+    local label = 'Casting'
+    if burst and burst.token == token then
+        burst.attempts = burst.attempts + 1
+        attempt = burst.attempts
+        if attempt > 1 then label = 'Retrying' end
+        if burst.casts > 0 and attempt == 1 then label = 'Bursting again' end
+        burst.sent = os.clock()
+        burst.spell = spell.en
+    end
+    message(colored(label, 167)..' '..colored(spell.en, 207)..colored(' on '..target.name..' ('..chain[1]..')', 0))
     windower.send_command('input /ma "'..spell.en..'" '..target_token)
+    if retry_enabled and burst and burst.token == token then
+        coroutine.schedule(function() check_burst(token, target_id, chain) end, retry_check)
+    end
+end
+
+local function window_left(b)
+    return burst_window - (os.clock() - b.detected)
+end
+
+-- No casting packet from us since the input: the game refused or ignored it.
+check_burst = function(token, target_id, chain)
+    local b = burst
+    if not active or token ~= sequence or not b or b.token ~= token then return end
+    if b.casting or (b.began and b.sent and b.began >= b.sent) then return end
+    if b.attempts >= max_attempts then
+        last_skip = chain[1]..': cast not accepted after '..b.attempts..' tries'
+        debug(last_skip)
+        return
+    end
+    if window_left(b) < 1.0 then
+        last_skip = chain[1]..': burst window ended before the cast was accepted'
+        debug(last_skip)
+        return
+    end
+    debug(chain[1]..': no cast started; retrying')
+    try_burst(token, target_id, chain)
+end
+
+-- Our own casting packets (category 8 begin / interrupt, category 4 finish).
+local function own_cast_packet(packet)
+    local b = burst
+    if not b or b.token ~= sequence then return end
+    local category = tonumber(packet.category)
+    if category == 8 then
+        if tonumber(packet.param) == INTERRUPTED then
+            b.casting = false
+            debug(b.chain[1]..': cast interrupted')
+            if retry_enabled and b.attempts < max_attempts and window_left(b) >= 1.5 then
+                local token = b.token
+                coroutine.schedule(function() try_burst(token, b.mob, b.chain) end, after_cast_delay)
+            end
+        else
+            b.casting = true
+            b.began = os.clock()
+        end
+    elseif category == 4 and b.casting then
+        b.casting = false
+        b.casts = b.casts + 1
+        b.attempts = 0
+        if multi_enabled and b.casts < max_bursts and window_left(b) >= 2.5 then
+            local token = b.token
+            debug(b.chain[1]..': cast '..b.casts..' done; next burst in '..after_cast_delay..'s')
+            coroutine.schedule(function() try_burst(token, b.mob, b.chain) end, after_cast_delay)
+        end
+    end
 end
 
 local function consider_skillchain(mob_id, effect_id)
@@ -264,6 +351,8 @@ local function consider_skillchain(mob_id, effect_id)
     sequence = sequence + 1
     local token = sequence
     debug(chain[1]..' detected on '..mob.name..' (effect '..tostring(effect_id)..'); cast queued at +0.9s')
+    burst = { token = token, mob = mob_id, chain = chain, detected = os.clock(),
+        casts = 0, attempts = 0, casting = false }
     coroutine.schedule(function()
         try_burst(token, mob_id, chain)
     end, 0.9)
@@ -281,6 +370,8 @@ windower.register_event('incoming chunk', function(id, data)
         debug('Unable to parse incoming action packet 0x028')
         return
     end
+    local me = windower.ffxi.get_player()
+    if me and packet.actor_id == me.id then own_cast_packet(packet) end
     for _, target in ipairs(packet.targets) do
         if target and target.id then
             local observed_target = nil
@@ -332,6 +423,10 @@ local function show_help()
     help_line(' on|off', 'Enable or disable automatic bursting')
     help_line(' debug on|off', 'Explain skillchain and casting decisions')
     help_line(' trace on|off', 'Show matching-target action message IDs for missed windows')
+    help_line(' retry on|off', 'Re-send a burst the game refused (on)')
+    help_line(' multi on|off', 'Cast another burst after the first lands (on)')
+    help_line(' bursts 1-4', 'Bursts per skillchain step (2)')
+    help_line(' window <sec>', 'How long after a skillchain to keep trying (7)')
     help_line(' sc help', 'Coordinated party skillchains (weapon skills, blood pacts)')
     help_line(' restart', 'Reload Boom')
     help_line(' unload', 'Unload Boom')
@@ -341,6 +436,8 @@ local function show_status()
         colored(' | Auto ', 0)..state_color(active)..colored(' | Debug ', 0)..state_color(debug_enabled)..
         colored(' | Trace ', 0)..state_color(trace_enabled))
     notice('Target:', '<t>/<bt> only | Delay: 0.9s | Duplicate filter: 0.20s')
+    message(colored('Retry', 167)..' '..state_color(retry_enabled)..colored(' | Multiple ', 0)..state_color(multi_enabled)..
+        colored(' | Bursts '..max_bursts..' | Window '..burst_window..'s', 0))
     notice('Skillchain:', last_skillchain)
     notice('Last WS:', last_ws_packet)
     notice('Last cast:', last_action)
@@ -350,12 +447,16 @@ end
 
 windower.register_event('addon command', function(command, value, ...)
     command = command and command:lower() or 'help'
-    if command == 'sc' then
+    -- Skillchain options also work without "sc": //boom target light
+    local sc_words = { sc=true, target=true, targets=true, opener=true, openers=true,
+        hold=true, holdtp=true, steps=true, solo=true }
+    if sc_words[command] then
         if not sc_module then
             notice('Skillchains:', 'not loaded')
             return
         end
         local raw = {value, ...}
+        if command ~= 'sc' then table.insert(raw, 1, command) end
         local args = {}
         for i, word in ipairs(raw) do args[i] = word:lower() end
         sc_module.command(args, raw)
@@ -376,6 +477,17 @@ windower.register_event('addon command', function(command, value, ...)
             trace_enabled = value == 'on' or (value ~= 'off' and not trace_enabled)
             message(colored('Trace', 167)..' '..state_color(trace_enabled))
         end
+    elseif command == 'retry' or command == 'multi' then
+        local current = command == 'retry' and retry_enabled or multi_enabled
+        local new_value = value == 'on' or (value ~= 'off' and not current)
+        if command == 'retry' then retry_enabled = new_value else multi_enabled = new_value end
+        message(colored(command == 'retry' and 'Retry' or 'Multiple bursts', 167)..' '..state_color(new_value))
+    elseif command == 'bursts' and tonumber(value) and tonumber(value) >= 1 and tonumber(value) <= 4 then
+        max_bursts = math.floor(tonumber(value))
+        notice('Bursts per skillchain:', tostring(max_bursts))
+    elseif command == 'window' and tonumber(value) and tonumber(value) >= 2 and tonumber(value) <= 12 then
+        burst_window = tonumber(value)
+        notice('Burst window:', tostring(burst_window)..'s')
     elseif command == 'restart' then
         notice('Restart:', 'Reloading Boom')
         windower.send_command('lua reload Boom')
@@ -391,6 +503,7 @@ end)
 windower.register_event('zone change', function()
     sequence = sequence + 1
     last_event = {}
+    burst = nil
 end)
 windower.register_event('logout', function()
     sequence = sequence + 1

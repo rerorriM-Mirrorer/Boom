@@ -181,6 +181,21 @@ check('mixed lets one member give a WS and a BP; off forbids it', function()
     assert(members_distinct(off.steps))
 end)
 
+check('solo release picks the highest-level weapon skill at the TP cap', function()
+    local m = { { name = 'Clairvaux', tp = 3000, abilities = { ws(WS.fast), ws(WS.savage), ws(WS.torcleaver) } } }
+    local r = plan(m)
+    eq(r.action, 'execute'); assert(r.solo); eq(#r.steps, 1); eq(r.steps[1].name, 'Torcleaver')
+    eq(planner.describe(r), 'Clairvaux Torcleaver (solo)')
+    eq(plan(m, { solo_tp = 0 }).action, 'none')
+    m[1].tp = 2999
+    eq(plan(m).action, 'none')
+end)
+
+check('solo release respects a preferred opener', function()
+    local m = { { name = 'Clairvaux', tp = 3000, abilities = { ws(WS.fast), ws(WS.torcleaver) } } }
+    eq(plan(m, { openers = { { ability = 'Fast Blade' } } }).steps[1].name, 'Fast Blade')
+end)
+
 check('protocol round-trips abilities, steps and messages', function()
     local text = protocol.encode_abilities({ ws(42), bp(550, false) })
     eq(text, 'w42r,b550n')

@@ -23,6 +23,16 @@ coordinator.__index = coordinator
 -- Trust action_message_util.weapon_skill_message_ids (hits that apply properties).
 local HIT_MESSAGES = { [2]=true, [110]=true, [185]=true, [187]=true, [317]=true, [529]=true, [802]=true }
 
+-- Category 3 also carries some job abilities (Shield Bash, Weapon Bash, Jump...)
+-- with a job ability id in param. Their ids overlap weapon skill ids (Shield
+-- Bash 46 = Expiacion 46), so these "uses an ability" messages are not weapon
+-- skills. Trust tells them apart the same way (actions.lua message fields).
+-- Seen in the user's 2026-11-16 logs: every "Unexpected Clairvaux Expiacion"
+-- followed a Shield Bash.
+local ABILITY_MESSAGES = { [110]=true, [317]=true }
+
+local INTERRUPTED = 28787 -- category 7/8 begin packet param when interrupted
+
 -- Skillchain effect ids -> chain name (same ids Boom bursts on).
 local CHAIN_EFFECTS = {
     [288]='Light', [289]='Darkness', [290]='Gravitation', [291]='Fragmentation', [292]='Distortion',
@@ -62,6 +72,8 @@ coordinator.default_settings = {
     step_margin = 0.4,
     step_timeout = 6,
     retry_delay = 1.5,
+    solo_tp = 3000,      -- release alone at this TP when no chain is possible (0 = never)
+    retry_interval = 1.0,
     trust_path = '',
 }
 
@@ -127,6 +139,7 @@ function coordinator:options()
         hold_for_three = s.hold_for_three == true,
         hold_max_tp = tonumber(s.hold_max_tp) or 3000,
         targets = split_list(s.targets),
+        solo_tp = tonumber(s.solo_tp) or 0,
         openers = openers,
         allow_bp = s.allow_bp ~= false,
         mixed = s.mixed ~= false,
@@ -376,7 +389,7 @@ function coordinator:finish_offers()
     poll.phase = 'acks'
     poll.acks = {}
     poll.deadline = self:now() + (tonumber(self.settings.ack_window) or 0.7)
-    self:send('plan', poll.pid, poll.mob, result.chain, protocol.encode_steps(result.steps))
+    self:send('plan', poll.pid, poll.mob, result.chain or '', protocol.encode_steps(result.steps))
     self:dbg('Plan ' .. planner.describe(result))
     -- the leader acknowledges its own steps directly
     local me = self:my_name()
@@ -407,12 +420,13 @@ function coordinator:check_acks()
     end
     if pending then return end
     local plan_steps = protocol.encode_steps(poll.plan.steps)
-    self:send('go', poll.pid, poll.mob, poll.plan.chain, plan_steps)
+    local continuing = poll.plan.continuing and '1' or '0'
+    self:send('go', poll.pid, poll.mob, poll.plan.chain or '', plan_steps, continuing)
     local plan = poll.plan
     local mob = poll.mob
     local pid = poll.pid
     self.poll = nil
-    self:begin_plan(pid, mob, plan.chain, plan.steps, self:my_name())
+    self:begin_plan(pid, mob, plan.chain, plan.steps, self:my_name(), plan.continuing == true)
 end
 
 function coordinator:end_poll(outcome)
@@ -502,7 +516,10 @@ function coordinator:on_ipc(message)
         local steps = protocol.decode_steps(f[4])
         if self.poll and self.poll.pid ~= pid then self.poll = nil end
         local leader = pid:match('^%d+%.(.+)%.%d+$')
-        self:begin_plan(pid, mob, chain, steps, leader)
+        local continuing = nil
+        if f[5] == '1' then continuing = true elseif f[5] == '0' then continuing = false end
+        if chain == '' then chain = nil end
+        self:begin_plan(pid, mob, chain, steps, leader, continuing)
     elseif kind == 'result' then
         -- someone's poll ended without a plan; avoid immediately re-polling the same state
         if not self.poll then
@@ -518,14 +535,18 @@ end
 ----------------------------------------------------------------------------
 -- execution (every client follows the plan; only the step's member acts)
 
-function coordinator:begin_plan(pid, mob, chain, steps, leader)
+function coordinator:begin_plan(pid, mob, chain, steps, leader, continuing)
     for _, s in ipairs(steps) do
         s.name = s.name or self:ability_name(s.kind, s.id)
         s.delay = self.data.delay(s.kind, s.id)
     end
     local current = self:current_chain(mob)
+    -- The leader's view decides whether step 1 must continue an open chain;
+    -- clients' trackers can differ by a packet.
+    if continuing == nil then continuing = current ~= nil end
+    if not continuing then current = nil end
     self.plan = { pid = pid, mob = mob, chain = chain, steps = steps, index = 1, leader = leader,
-        continuing = current ~= nil }
+        continuing = continuing }
     local text = planner.describe({ steps = steps, chain = chain })
     self.last_plan = text
     local me = self:my_name()
@@ -547,10 +568,27 @@ function coordinator:arm_step(index, at)
     local plan = self.plan
     local step = plan.steps[index]
     plan.deadline = at + (tonumber(self.settings.step_timeout) or 6)
+    plan.started = nil
+    plan.sent_at = nil
+    -- Retries stop when the open window would be too short to land in.
+    local chain = self.chains[plan.mob]
+    if (index > 1 or plan.continuing) and chain then
+        plan.window_end = chain.expires - 0.5
+    else
+        plan.window_end = at + 4
+    end
     if step.member ~= self:my_name() then return end
     local pid = plan.pid
     local wait = math.max(0, at - self:now())
     self.env.schedule(function() self:fire(pid, index) end, wait)
+end
+
+-- Blockers that mean "the first input probably went through": the blood pact
+-- recast started or the TP was spent. Seen live: a retry check ran while
+-- Carbuncle was still readying Poison Nails and cancelled a pact that landed.
+local function consumed(why)
+    why = tostring(why or '')
+    return why:find('recast', 1, true) ~= nil or why:match('^TP %d') ~= nil
 end
 
 function coordinator:fire(pid, index, attempt)
@@ -558,19 +596,27 @@ function coordinator:fire(pid, index, attempt)
     local plan = self.plan
     if not plan or plan.pid ~= pid or plan.index ~= index then return end
     local step = plan.steps[index]
+    if attempt > 1 then
+        if plan.started then return end                          -- action began; wait for it
+        if self:now() >= (plan.window_end or 0) then return end  -- timeout will release
+    end
     local ok, why = self:validate_step(plan.mob, step)
     if not ok then
+        if attempt > 1 and consumed(why) then return end
         self:abort(self:my_name() .. ' cannot use ' .. step.name .. ' (' .. tostring(why) .. ')')
         return
     end
     local prefix = step.kind == 'bp' and '/pet' or '/ws'
-    self:dbg('Step ' .. index .. ': ' .. step.name .. (attempt > 1 and ' (retry)' or ''))
+    self:dbg('Step ' .. index .. ': ' .. step.name .. (attempt > 1 and (' (retry ' .. (attempt - 1) .. ')') or ''))
+    plan.sent_at = plan.sent_at or self:now()
     self.w.send_command('input ' .. prefix .. ' "' .. step.name .. '" ' .. tostring(plan.mob))
-    -- FFXI can refuse input during an action lock ("Unable to use ... at this
-    -- time"). If our action has not appeared, try once more while the window
-    -- is still open. Inferred: 2s covers the input-to-packet time; confirm live.
-    if attempt < 2 then
-        self.env.schedule(function() self:fire(pid, index, attempt + 1) end, 2.0)
+    plan.deadline = math.max(plan.deadline or 0, self:now() + (tonumber(self.settings.step_timeout) or 6))
+    -- FFXI refuses input during an action lock ("Unable to use weapon skill."),
+    -- seen 66 times on Myrr while singing. Keep re-sending until the action
+    -- begins or the window gets too short.
+    if attempt < 8 then
+        self.env.schedule(function() self:fire(pid, index, attempt + 1) end,
+            tonumber(self.settings.retry_interval) or 1.0)
     end
 end
 
@@ -595,10 +641,35 @@ function coordinator:end_plan(reason, failed)
 end
 
 -- Action packet from the game (all clients see party members' actions).
+function coordinator:note_begin(packet, category)
+    local plan = self.plan
+    if not plan or tonumber(packet.param) == INTERRUPTED then return end
+    local step = plan.steps[plan.index]
+    if not step then return end
+    local _, by_id = self:party_map()
+    if by_id[packet.actor_id] ~= step.member then return end
+    -- weapon skill: readying (7); blood pact: the summoner's command (6) or the avatar readying (7)
+    if category == 7 or (category == 6 and step.kind == 'bp') then
+        if not plan.started then
+            plan.started = self:now()
+            plan.deadline = self:now() + (tonumber(self.settings.step_timeout) or 6)
+        end
+    end
+end
+
 function coordinator:on_action(packet)
     if not self.data or type(packet) ~= 'table' then return end
     local category = tonumber(packet.category)
+    if category == 6 or category == 7 then
+        self:note_begin(packet, category)
+        return
+    end
     if category ~= 3 and category ~= 13 then return end
+    if category == 3 then
+        local first = packet.targets and packet.targets[1]
+        local action = first and first.actions and first.actions[1]
+        if action and ABILITY_MESSAGES[tonumber(action.message)] then return end
+    end
     local kind = (category == 13) and 'bp' or 'ws'
     local id = tonumber(packet.param)
     if not id or #self.data.props(kind, id) == 0 then return end
@@ -700,7 +771,8 @@ end
 
 local BOOL_KEYS = { enabled=true, hold_for_three=true, allow_bp=true, mixed=true }
 local NUMBER_KEYS = { max_steps=true, hold_max_tp=true, min_tp=true, poll_window=true,
-    ack_window=true, step_margin=true, step_timeout=true, retry_delay=true }
+    ack_window=true, step_margin=true, step_timeout=true, retry_delay=true, solo_tp=true,
+    retry_interval=true }
 local TEXT_KEYS = { targets=true, openers=true, announce=true }
 
 function coordinator:apply_setting(key, value, from_ipc)

@@ -25,6 +25,7 @@ planner.default_options = {
     openers = {},           -- preferred openers: { {member=nil|'Name', ability='Savage Blade'} }
     allow_bp = true,        -- include Blood Pact: Rage
     mixed = true,           -- a member may give one weapon skill and one blood pact in a chain
+    solo_tp = 3000,         -- with no chain possible, a member at this TP weapon skills alone (0 = never)
 }
 
 local function lower(s) return type(s) == 'string' and s:lower() or s end
@@ -177,6 +178,35 @@ local function search(candidates, current, options, data)
     return best
 end
 
+-- Best lone weapon skill for a member at the solo TP cap, or nil.
+local function solo_release(ready, options, data)
+    if (tonumber(options.solo_tp) or 0) <= 0 then return nil end
+    local best, best_score = nil, nil
+    for _, c in ipairs(ready) do
+        if c.kind == 'ws' and (c.tp or 0) >= options.solo_tp then
+            local top = 0
+            for _, p in ipairs(c.props) do top = math.max(top, data.level(p)) end
+            local score = { opener_matches(c, options.openers) and 1 or 0, top, c.tp or 0 }
+            local key = c.member .. '/' .. c.name
+            local better_one = best == nil
+            if not better_one then
+                for i = 1, #score do
+                    if score[i] ~= best_score[i] then better_one = score[i] > best_score[i]; break end
+                    if i == #score then better_one = key < (best.member .. '/' .. best.name) end
+                end
+            end
+            if better_one then best, best_score = c, score end
+        end
+    end
+    if not best then return nil end
+    return {
+        action = 'execute', solo = true, chain = nil, level = 0, continuing = false,
+        steps = { { member = best.member, kind = best.kind, id = best.id, name = best.name,
+            delay = best.delay, tp = best.tp } },
+        reason = 'Solo release: ' .. best.member .. ' at ' .. tostring(best.tp) .. ' TP, no chain possible',
+    }
+end
+
 function planner.plan(input)
     local data = input.data
     local options = merged_options(input.options)
@@ -196,6 +226,8 @@ function planner.plan(input)
             for _, c in ipairs(ready) do
                 if c.kind == 'ws' and (c.tp or 0) >= options.hold_max_tp then capped = true end
             end
+            local solo = (not best) and solo_release(ready, options, data) or nil
+            if solo then return solo end
             if not capped then
                 return { action = 'hold', best = best, potential = potential,
                     reason = 'Saving TP: party can make 3 steps (' .. potential.chain .. ')' }
@@ -203,6 +235,11 @@ function planner.plan(input)
         end
     end
 
+    if not best or (current and current.chain and #options.targets > 0 and best.score[1] == 0
+        and matches_target(current.chain, options.targets, data)) then
+        local solo = solo_release(ready, options, data)
+        if solo then return solo end
+    end
     if not best then
         if current then
             return { action = 'none', reason = 'No ready ability continues ' .. tostring(current.chain or 'the opener') }
@@ -230,6 +267,9 @@ function planner.describe(plan)
     local parts = {}
     for _, s in ipairs(plan.steps or {}) do
         parts[#parts + 1] = s.member .. ' ' .. s.name
+    end
+    if plan.chain == nil or plan.chain == '' then
+        return table.concat(parts, ' > ') .. ' (solo)'
     end
     return table.concat(parts, ' > ') .. ' = ' .. tostring(plan.chain)
 end

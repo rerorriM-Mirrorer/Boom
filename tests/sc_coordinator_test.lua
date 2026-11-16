@@ -84,7 +84,13 @@ function World:perform(client, kind, id, target_id)
         self.log[#self.log + 1] = client.name .. ' refused'
         return
     end
-    self:at(1.0, function()
+    local begin_actor = kind == 'bp' and actor.pet.id or actor.player.id
+    self:at(0.1, function()
+        local packet = { category = 7, param = 24931, actor_id = begin_actor, targets = { { id = target_id, actions = { {} } } } }
+        for _, other in ipairs(self.clients) do other.sc:on_action(packet) end
+        if kind == 'bp' then actor.recasts[173] = 60 end -- recast starts at the command, before the pact lands
+    end)
+    self:at(kind == 'bp' and 3.0 or 1.0, function()
         local props = data.props(kind, id)
         local effect = nil
         local now = self.t
@@ -249,7 +255,7 @@ check('later steps wait for the previous action plus the chain delay', function(
     eq(#times, 3)
     assert(times[2] - times[1] >= 3.0 + 0.4, 'step 2 too early: ' .. (times[2] - times[1]))
     assert(times[3] - times[2] >= 3.0 + 0.4, 'step 3 too early: ' .. (times[3] - times[2]))
-    assert(times[3] - times[2] < 6, 'step 3 too late')
+    assert(times[3] - times[2] < 7.5, 'step 3 too late (blood pact lands ~3s after input)')
 end)
 
 check('simultaneous readiness on every client still yields exactly one plan', function()
@@ -281,7 +287,7 @@ check('a refused game action times out and frees every client', function()
     w.swallow['Clairvaux'] = true -- step 2 is input but the game never performs it
     w:advance(12.5)
     eq(game_actions(w), 1, 'only the opener happened')
-    eq(count(w.commands, 'Clairvaux: input /ws'), 2, 'Clairvaux should retry once: ' .. table.concat(w.commands, ' | '))
+    assert(count(w.commands, 'Clairvaux: input /ws') >= 3, 'Clairvaux should keep retrying: ' .. table.concat(w.commands, ' | '))
     for _, c in ipairs(w.clients) do
         eq(c.sc.plan, nil, c.name .. ' stuck in plan')
         assert(c.sc.last_result:find('timed out'), c.name .. ': ' .. c.sc.last_result)
@@ -311,7 +317,7 @@ check('an unexpected party weapon skill aborts the plan everywhere', function()
     w:advance(1.6) -- opener has been input
     -- Cioara (step 3) acts early with Predator Claws, out of turn
     w:perform(w.by_name['Cioara'], 'bp', 598, w.mob.id)
-    w:advance(1.2)
+    w:advance(3.4) -- blood pacts land ~3s after input
     for _, c in ipairs(w.clients) do
         eq(c.sc.plan, nil, c.name .. ' kept the plan')
         assert(c.sc.last_result:find('Unexpected') or c.sc.last_result:find('No skillchain'), c.name .. ': ' .. c.sc.last_result)
@@ -349,7 +355,7 @@ end)
 
 check('Boom clients outside the party are ignored', function()
     local w = standard_party()
-    w:add_client('Mule', { tp = 3000, ws = { 'Savage Blade' }, in_party = false })
+    w:add_client('Mule', { tp = 2000, ws = { 'Savage Blade' }, in_party = false })
     w:advance(15)
     eq(count(w.commands, '^Mule'), 0, 'outsider acted')
     eq(#w.commands, 3)
@@ -384,6 +390,74 @@ check('target death clears the plan', function()
     w.mob.hpp = 0
     w:advance(1)
     for _, c in ipairs(w.clients) do eq(c.sc.plan, nil, c.name) end
+end)
+
+check('Shield Bash (category 3 job ability, id 46 = Expiacion) is not a weapon skill', function()
+    local w = standard_party()
+    w:advance(1.6) -- opener input, plan active
+    local clairvaux = w.by_name['Clairvaux']
+    local packet = { category = 3, param = 46, actor_id = clairvaux.player.id,
+        targets = { { id = w.mob.id, actions = { { message = 110 } } } } }
+    for _, c in ipairs(w.clients) do c.sc:on_action(packet) end
+    for _, c in ipairs(w.clients) do
+        assert(c.sc.plan ~= nil, c.name .. ' dropped the plan: ' .. c.sc.last_result)
+    end
+    w:advance(14)
+    eq(#w.commands, 3, table.concat(w.commands, ' | '))
+    assert(w.log[#w.log]:find('-> Light'), w.log[#w.log])
+end)
+
+check('a slow blood pact is not cancelled by its own recast', function()
+    local w = World.new()
+    w:add_client('Cioara', { tp = 0, engaged = false, pet = true, bp = { 'Flaming Crush' } })
+    w:add_client('Clairvaux', { tp = 1000, ws = { 'Savage Blade' } })
+    w:advance(12)
+    eq(count(w.commands, '/pet'), 1, table.concat(w.commands, ' | '))
+    assert(w.log[#w.log]:find('-> Light'), table.concat(w.log, ' | '))
+    for _, c in ipairs(w.clients) do
+        assert(count(c.chats, 'Skillchain stopped') == 0, c.name .. ' stopped the plan: ' .. table.concat(c.chats, ' | '))
+    end
+end)
+
+check('a busy member keeps re-sending until the game accepts', function()
+    local w = standard_party()
+    local myrr = w.by_name['Myrr']
+    local refusals = 0
+    local perform = w.perform
+    w.perform = function(self, client, kind, id, target)
+        if client == myrr and refusals < 3 then
+            refusals = refusals + 1
+            self.log[#self.log + 1] = 'Myrr refused'
+            return
+        end
+        return perform(self, client, kind, id, target)
+    end
+    w:advance(20)
+    eq(refusals, 3)
+    assert(w.log[#w.log]:find('-> Light'), table.concat(w.log, ' | '))
+end)
+
+check('lone melee at 3000 TP releases when no chain is possible', function()
+    local w = World.new()
+    w:add_client('Clairvaux', { tp = 3000, ws = { 'Savage Blade' } })
+    w:add_client('Myrr', { tp = 200, ws = { 'Wasp Sting' } })
+    w:advance(3)
+    eq(#w.commands, 1, table.concat(w.commands, ' | '))
+    eq(w.commands[1], 'Clairvaux: input /ws "Savage Blade" 9001')
+    w:advance(3)
+    eq(w.by_name['Myrr'].sc.plan, nil)
+    assert(w.by_name['Clairvaux'].sc.last_result:find('done'), w.by_name['Clairvaux'].sc.last_result)
+end)
+
+check('below the solo TP nothing fires alone; solo off never releases', function()
+    local w = World.new()
+    w:add_client('Clairvaux', { tp = 2900, ws = { 'Savage Blade' } })
+    w:advance(5)
+    eq(#w.commands, 0)
+    local w2 = World.new()
+    w2:add_client('Clairvaux', { tp = 3000, ws = { 'Savage Blade' }, settings = { solo_tp = 0 } })
+    w2:advance(5)
+    eq(#w2.commands, 0)
 end)
 
 print(passed .. ' coordinator simulation tests passed')
