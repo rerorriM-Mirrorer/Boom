@@ -1,5 +1,13 @@
 # Boom testing log
 
+## Current Development Status - November 16, 2026, promoted to main (America/Chicago)
+
+- **User confirmation (2026-11-16, 04:12):** after playing with 0.2.2-test7 (colors set live to light blue names 207, white abilities 0, green result 158), the user reports it "has been working very well" and calls it a known-good addon. On that confirmation, `test/sc-coordinator` (0.2.0-test5 through 0.2.2-test7 plus the color-default commits) is fast-forward merged into `main`. `main` is now the known-good version.
+- **Still not specifically confirmed live:** no new logs since test6, so the individual test6/test7 checks above (Shield Bash no longer aborting, blood pacts no longer self-cancelled, burst retries landing, Failsafe hand-off) are covered by the user's overall report rather than per-item log evidence.
+- **Rollback:** the `0.1.3-test4` baseline is commit `3c03cff`; any earlier test zip can be reinstalled over `addons/Boom/`.
+
+---
+
 ## Current Development Status - November 16, 2026, test7 (America/Chicago)
 
 - **Source / branch:** `test/sc-coordinator`, after test6.
