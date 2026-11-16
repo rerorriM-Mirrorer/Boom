@@ -1,0 +1,389 @@
+-- Multi-client simulation of the skillchain coordinator. Several coordinator
+-- instances share a fake IPC bus and a fake game that turns /ws and /pet
+-- commands into action packets, using Trust's real data for chain results.
+--   lua5.1 tests/sc_coordinator_test.lua
+-- Simulated only: real FFXI timing, packets, latency and refusals are untested.
+local script_dir = (arg[0] or ''):gsub('[^/\\]+$', '')
+package.path = script_dir .. '?.lua;' .. package.path
+local env = require('sc_env')
+local data = env.setup()
+local coordinator = require('sc/coordinator')
+
+local passed = 0
+local function check(name, fn)
+    local ok, err = pcall(fn)
+    if not ok then error('Test failed: ' .. name .. ' - ' .. tostring(err), 0) end
+    passed = passed + 1
+    print('PASS ' .. name)
+end
+local function eq(a, b, what) assert(a == b, (what or 'value') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a)) end
+
+-- Resources the coordinator reads (names, weapon skill range, BP recast id).
+local res = {
+    weapon_skills = {}, job_abilities = {},
+}
+for id, e in pairs(require('cylibs/res/skills').weapon_skills) do
+    res.weapon_skills[id] = { id = id, en = e.en, range = 2, targets = { Enemy = true } }
+end
+for id, e in pairs(require('cylibs/res/skills').job_abilities) do
+    res.job_abilities[id] = { id = id, en = e.en }
+end
+res.job_abilities[603] = { id = 603, en = 'Blood Pact: Rage', recast_id = 173 }
+function res.job_abilities:with(key, value)
+    for _, v in pairs(self) do if type(v) == 'table' and v[key] == value then return v end end
+end
+local ws_by_name, ja_by_name = {}, {}
+for id, v in pairs(res.weapon_skills) do ws_by_name[v.en] = id end
+for id, v in pairs(res.job_abilities) do if type(v) == 'table' then ja_by_name[v.en] = id end end
+
+local effect_for = {}
+for id, name in pairs(coordinator.CHAIN_EFFECTS) do
+    if not effect_for[name] or id < effect_for[name] then effect_for[name] = id end
+end
+effect_for['Light Lv.4'] = effect_for['Light']; effect_for['Darkness Lv.4'] = effect_for['Darkness']
+
+----------------------------------------------------------------------------
+-- world
+
+local World = {}
+World.__index = World
+
+function World.new()
+    local w = setmetatable({ t = 100, tasks = {}, clients = {}, by_name = {}, party = {},
+        mob = { id = 9001, index = 101, name = 'Training Dummy', is_npc = true, valid_target = true,
+            hpp = 100, distance = 9, model_size = 2 },
+        chain = nil, commands = {}, log = {}, swallow = {} }, World)
+    return w
+end
+
+function World:at(delay, fn)
+    self.tasks[#self.tasks + 1] = { at = self.t + delay, fn = fn, seq = #self.tasks }
+end
+
+function World:advance(seconds, step)
+    step = step or 0.05
+    local stop = self.t + seconds
+    while self.t < stop - 1e-9 do
+        self.t = self.t + step
+        local due = {}
+        local keep = {}
+        for _, task in ipairs(self.tasks) do
+            if task.at <= self.t + 1e-9 then due[#due + 1] = task else keep[#keep + 1] = task end
+        end
+        self.tasks = keep
+        table.sort(due, function(a, b) if a.at ~= b.at then return a.at < b.at end return a.seq < b.seq end)
+        for _, task in ipairs(due) do task.fn() end
+        for _, c in ipairs(self.clients) do c.sc:tick() end
+    end
+end
+
+-- Game: resolve a weapon skill / blood pact and broadcast the action packet.
+function World:perform(client, kind, id, target_id)
+    local actor = client
+    if self.swallow[client.name] then
+        self.log[#self.log + 1] = client.name .. ' refused'
+        return
+    end
+    self:at(1.0, function()
+        local props = data.props(kind, id)
+        local effect = nil
+        local now = self.t
+        local c = self.chain
+        if c and now >= c.opens and now < c.expires then
+            local prev = c.chain and { c.chain } or c.props
+            local made = data.combine_lists(prev, props)
+            if made then
+                local chain = made
+                effect = effect_for[made]
+                self.chain = { chain = chain, props = props, step = c.step + 1,
+                    opens = now + data.delay(kind, id), expires = now + data.delay(kind, id) + 8 - (c.step + 1) }
+            else
+                self.chain = nil
+            end
+        end
+        if not effect then
+            self.chain = { chain = nil, props = props, step = 1, opens = now + data.delay(kind, id),
+                expires = now + data.delay(kind, id) + 7 }
+        end
+        if kind == 'ws' then actor.player.vitals.tp = 0 else actor.recasts[173] = 60 end
+        self.log[#self.log + 1] = string.format('%.2f %s %s%s', now, actor.name, data.name(kind, id),
+            effect and (' -> ' .. coordinator.CHAIN_EFFECTS[effect]) or '')
+        local packet = {
+            category = kind == 'bp' and 13 or 3, param = id,
+            actor_id = kind == 'bp' and actor.pet.id or actor.player.id,
+            targets = { { id = target_id, actions = { { message = kind == 'bp' and 317 or 185,
+                add_effect_message = effect, has_add_effect = effect ~= nil } } } },
+        }
+        for _, other in ipairs(self.clients) do other.sc:on_action(packet) end
+    end)
+end
+
+function World:add_client(name, opts)
+    opts = opts or {}
+    local world = self
+    local n = #self.clients + 1
+    local client = { name = name, recasts = { [173] = 0 }, chats = {} }
+    client.player = { id = 1000 + n, index = 10 + n, name = name, status = opts.engaged == false and 0 or 1,
+        vitals = { tp = opts.tp or 0 }, buffs = {} }
+    client.me = { id = client.player.id, index = client.player.index, model_size = 1 }
+    if opts.pet then client.pet = { id = 5000 + n, index = 500 + n, name = 'Ifrit' } end
+    client.ws = opts.ws or {}
+    client.bp = opts.bp or {}
+    client.in_party = opts.in_party ~= false
+    if client.in_party then
+        self.party[#self.party + 1] = client
+    end
+
+    local fake = { ffxi = {} }
+    function fake.ffxi.get_player() return client.player end
+    function fake.ffxi.get_party()
+        local p = {}
+        if not client.in_party then
+            p.p0 = { name = name, mob = { id = client.player.id, pet_index = client.pet and client.pet.index } }
+            return p
+        end
+        for i, member in ipairs(world.party) do
+            p['p' .. (i - 1)] = { name = member.name,
+                mob = { id = member.player.id, pet_index = member.pet and member.pet.index } }
+        end
+        return p
+    end
+    function fake.ffxi.get_mob_by_id(id)
+        if id == world.mob.id then return world.mob end
+        for _, c in ipairs(world.clients) do if c.player.id == id then return c.me end end
+    end
+    function fake.ffxi.get_mob_by_index(index)
+        for _, c in ipairs(world.clients) do if c.pet and c.pet.index == index then return c.pet end end
+    end
+    function fake.ffxi.get_mob_by_target(which)
+        if which == 'pet' then return client.pet end
+        if (which == 't' or which == 'bt') and world.mob.hpp > 0 then return world.mob end
+    end
+    function fake.ffxi.get_abilities()
+        local ws, ja = {}, {}
+        for _, n2 in ipairs(client.ws) do ws[#ws + 1] = ws_by_name[n2] end
+        for _, n2 in ipairs(client.bp) do ja[#ja + 1] = ja_by_name[n2] end
+        return { weapon_skills = ws, job_abilities = ja }
+    end
+    function fake.ffxi.get_ability_recasts() return client.recasts end
+    function fake.ffxi.get_info() return { mog_house = false } end
+    function fake.send_ipc_message(message)
+        for _, other in ipairs(world.clients) do
+            if other ~= client then
+                world:at(0.02, function() other.sc:on_ipc(message) end)
+            end
+        end
+    end
+    function fake.send_command(command)
+        world.commands[#world.commands + 1] = name .. ': ' .. command
+        local prefix, ability, target = command:match('^input (/%a+) "(.-)" (%d+)$')
+        if prefix == '/ws' then
+            world:perform(client, 'ws', ws_by_name[ability], tonumber(target))
+        elseif prefix == '/pet' then
+            world:perform(client, 'bp', ja_by_name[ability], tonumber(target))
+        end
+    end
+
+    local settings = {}
+    for k, v in pairs(coordinator.default_settings) do settings[k] = v end
+    for k, v in pairs(opts.settings or {}) do settings[k] = v end
+    client.settings = settings
+    client.sc = coordinator.new({
+        windower = fake, res = res, data = data, settings = settings,
+        now = function() return world.t end,
+        schedule = function(fn, delay) world:at(delay, fn) end,
+        chat = {
+            message = function(t) client.chats[#client.chats + 1] = t end,
+            notice = function(h, t) client.chats[#client.chats + 1] = h .. ' ' .. t end,
+            debug = function(t) client.chats[#client.chats + 1] = 'DEBUG ' .. t end,
+            colored = function(v) return tostring(v) end,
+        },
+    })
+    self.clients[#self.clients + 1] = client
+    self.by_name[name] = client
+    return client
+end
+
+local function standard_party(opts)
+    opts = opts or {}
+    local w = World.new()
+    w:add_client('Clairvaux', { tp = 1200, ws = { 'Savage Blade', 'Vorpal Blade', 'Fast Blade' }, settings = opts.settings })
+    w:add_client('Myrr', { tp = opts.myrr_tp or 1000, ws = { 'Wasp Sting', 'Gust Slash', 'Evisceration' }, settings = opts.settings })
+    w:add_client('Cioara', { tp = 0, engaged = false, pet = true, bp = { 'Flaming Crush', 'Predator Claws' }, settings = opts.settings })
+    return w
+end
+
+local function count(list, pattern)
+    local n = 0
+    for _, v in ipairs(list) do if v:find(pattern) then n = n + 1 end end
+    return n
+end
+
+local function game_actions(w)
+    local n = 0
+    for _, line in ipairs(w.log) do if not line:find('refused') then n = n + 1 end end
+    return n
+end
+
+----------------------------------------------------------------------------
+
+check('three clients poll, agree and execute one 3-step Light chain in order', function()
+    local w = standard_party()
+    w:advance(15)
+    eq(#w.commands, 3, 'commands sent: ' .. table.concat(w.commands, ' | '))
+    eq(w.commands[1], 'Myrr: input /ws "Evisceration" 9001')
+    eq(w.commands[2], 'Clairvaux: input /ws "Savage Blade" 9001')
+    eq(w.commands[3], 'Cioara: input /pet "Flaming Crush" 9001')
+    assert(w.log[#w.log]:find('-> Light'), 'last action should make Light: ' .. w.log[#w.log])
+    for _, c in ipairs(w.clients) do
+        eq(c.sc.plan, nil, c.name .. ' still has a plan')
+        assert(c.sc.last_result:find('Light'), c.name .. ' result ' .. c.sc.last_result)
+    end
+end)
+
+check('later steps wait for the previous action plus the chain delay', function()
+    local w = standard_party()
+    w:advance(15)
+    local times = {}
+    for _, line in ipairs(w.log) do times[#times + 1] = tonumber(line:match('^(%S+)')) end
+    eq(#times, 3)
+    assert(times[2] - times[1] >= 3.0 + 0.4, 'step 2 too early: ' .. (times[2] - times[1]))
+    assert(times[3] - times[2] >= 3.0 + 0.4, 'step 3 too early: ' .. (times[3] - times[2]))
+    assert(times[3] - times[2] < 6, 'step 3 too late')
+end)
+
+check('simultaneous readiness on every client still yields exactly one plan', function()
+    local w = standard_party()
+    -- all clients tick at the same instant in the first advance step
+    w:advance(15, 0.25)
+    eq(#w.commands, 3, table.concat(w.commands, ' | '))
+    eq(count(w.commands, 'Evisceration'), 1, 'duplicate opener')
+end)
+
+check('a member refusing at acknowledgement stops the plan before any action', function()
+    local w = standard_party()
+    -- Myrr's TP drops between offer and ack: drop it when the plan arrives
+    local myrr = w.by_name['Myrr']
+    local original = myrr.sc.on_ipc
+    myrr.sc.on_ipc = function(self, message)
+        if message:find('^boomsc|plan') then myrr.player.vitals.tp = 200 end
+        return original(self, message)
+    end
+    w:advance(1.5)
+    eq(#w.commands, 0, table.concat(w.commands, ' | '))
+    local leader
+    for _, c in ipairs(w.clients) do if c.sc.last_result:find('refused') then leader = c end end
+    assert(leader, 'no client recorded the refusal')
+end)
+
+check('a refused game action times out and frees every client', function()
+    local w = standard_party()
+    w.swallow['Clairvaux'] = true -- step 2 is input but the game never performs it
+    w:advance(12.5)
+    eq(game_actions(w), 1, 'only the opener happened')
+    eq(count(w.commands, 'Clairvaux: input /ws'), 2, 'Clairvaux should retry once: ' .. table.concat(w.commands, ' | '))
+    for _, c in ipairs(w.clients) do
+        eq(c.sc.plan, nil, c.name .. ' stuck in plan')
+        assert(c.sc.last_result:find('timed out'), c.name .. ': ' .. c.sc.last_result)
+    end
+end)
+
+check('a retry recovers a step the game refused once', function()
+    local w = standard_party()
+    local clairvaux = w.by_name['Clairvaux']
+    local refusals = 0
+    local perform = w.perform
+    w.perform = function(self, client, kind, id, target)
+        if client == clairvaux and refusals == 0 then
+            refusals = 1
+            self.log[#self.log + 1] = 'Clairvaux refused'
+            return
+        end
+        return perform(self, client, kind, id, target)
+    end
+    w:advance(18)
+    eq(game_actions(w), 3, table.concat(w.log, ' | '))
+    assert(w.log[#w.log]:find('-> Light'), w.log[#w.log])
+end)
+
+check('an unexpected party weapon skill aborts the plan everywhere', function()
+    local w = standard_party()
+    w:advance(1.6) -- opener has been input
+    -- Cioara (step 3) acts early with Predator Claws, out of turn
+    w:perform(w.by_name['Cioara'], 'bp', 598, w.mob.id)
+    w:advance(1.2)
+    for _, c in ipairs(w.clients) do
+        eq(c.sc.plan, nil, c.name .. ' kept the plan')
+        assert(c.sc.last_result:find('Unexpected') or c.sc.last_result:find('No skillchain'), c.name .. ': ' .. c.sc.last_result)
+    end
+end)
+
+check('settings set on one client reach every client', function()
+    local w = standard_party()
+    w.by_name['Myrr'].sc:set_everywhere('targets', 'Distortion')
+    w.by_name['Myrr'].sc:set_everywhere('max_steps', '2')
+    w:advance(0.1)
+    for _, c in ipairs(w.clients) do
+        eq(c.settings.targets, 'Distortion', c.name)
+        eq(c.settings.max_steps, 2, c.name)
+    end
+end)
+
+check('targets follow the shared setting and fall back when impossible', function()
+    local w = standard_party({ settings = { targets = 'Distortion' } })
+    w:advance(15)
+    assert(w.log[#w.log]:find('Distortion'), w.log[#w.log])
+    local w2 = standard_party({ settings = { targets = 'Umbra' } })
+    w2:advance(15)
+    assert(w2.log[#w2.log]:find('Light'), 'fallback chain: ' .. w2.log[#w2.log])
+end)
+
+check('hold for three waits for TP, then runs the 3-step chain', function()
+    local w = standard_party({ myrr_tp = 500, settings = { hold_for_three = true } })
+    w:advance(5)
+    eq(#w.commands, 0, 'should hold: ' .. table.concat(w.commands, ' | '))
+    w.by_name['Myrr'].player.vitals.tp = 1000
+    w:advance(15)
+    eq(#w.commands, 3, table.concat(w.commands, ' | '))
+end)
+
+check('Boom clients outside the party are ignored', function()
+    local w = standard_party()
+    w:add_client('Mule', { tp = 3000, ws = { 'Savage Blade' }, in_party = false })
+    w:advance(15)
+    eq(count(w.commands, '^Mule'), 0, 'outsider acted')
+    eq(#w.commands, 3)
+end)
+
+check('scales to six members and uses at most max steps', function()
+    local w = standard_party({ settings = { max_steps = 4 } })
+    w:add_client('Ichi', { tp = 1000, ws = { 'Swift Blade' }, settings = { max_steps = 4 } })
+    w:add_client('Ni', { tp = 1000, ws = { 'Gust Slash' }, settings = { max_steps = 4 } })
+    w:add_client('San', { tp = 1000, ws = { 'Fast Blade' }, settings = { max_steps = 4 } })
+    w:advance(25)
+    assert(#w.commands >= 3 and #w.commands <= 4, '#commands ' .. #w.commands .. ': ' .. table.concat(w.commands, ' | '))
+    eq(game_actions(w), #w.commands)
+    local seen = {}
+    for _, line in ipairs(w.commands) do
+        local who = line:match('^(%S+):')
+        assert(not seen[who], who .. ' acted twice')
+        seen[who] = true
+    end
+end)
+
+check('off on one client turns coordination off on all', function()
+    local w = standard_party()
+    w.by_name['Cioara'].sc:set_everywhere('enabled', 'false')
+    w:advance(10)
+    eq(#w.commands, 0)
+end)
+
+check('target death clears the plan', function()
+    local w = standard_party()
+    w:advance(1.6)
+    w.mob.hpp = 0
+    w:advance(1)
+    for _, c in ipairs(w.clients) do eq(c.sc.plan, nil, c.name) end
+end)
+
+print(passed .. ' coordinator simulation tests passed')

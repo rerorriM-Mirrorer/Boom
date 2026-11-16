@@ -1,4 +1,4 @@
-# Boom - Windower 4 (0.1.3-test4)
+# Boom - Windower 4 (0.2.0-test5)
 
 **Load it. Skillchain happens. Boom.** Boom automatically attempts one learned, job-usable, ready, affordable magic burst on the currently targeted enemy when it detects a skillchain. No activation or spell-tier setup required. This update **keeps the exact 0.9-second delay** that the user reported working in game.
 
@@ -18,7 +18,32 @@ Boom prints a color-formatted `[Boom] Casting ...` message on attempted bursts. 
 - For **Light**, a **WHM main job** tries its light spells first: `Holy II`, `Holy`, `Banish III`, `Banish II`, `Banish`. If Holy II is unavailable and the WHM knows Holy, the addon will attempt **Holy** on a Light skillchain (and other Light-compatible chains such as Fusion, Transfixion, and Radiance). This priority is retained even with a nuking support job. When no light spell is usable, it may use a compatible elemental spell from the support job instead.
 - For other main jobs, the original elemental order is unchanged; light spells remain available if no higher-priority eligible elemental spell is usable. On Dark properties, Drain-family spells remain eligible.
 
-Boom does not perform SMN Blood Pacts, BST Ready moves, or PUP pet commands. It does not initiate skillchains; it reacts to detected skillchain effects. Normal GearSwap spell interception remains in place.
+Bursting itself never uses Blood Pacts, BST Ready moves, or PUP pet commands; it reacts to detected skillchain effects. Normal GearSwap spell interception remains in place. Making skillchains is the separate, optional coordinator below.
+
+## Skillchain coordinator (test5, not yet live-tested)
+
+Load Boom on **every** character in the party. When a character is ready (1000+ TP while engaged, or Blood Pact: Rage ready with an avatar out), its Boom polls the other Boom clients, collects what each of them can use right now, plans the best chain, asks each member to confirm, then runs it: step 1 fires, and each later step fires when the previous step's action is seen plus that ability's chain delay (3 seconds unless Trust's data says otherwise) and a small margin. If anyone refuses, misses, acts out of turn, the chain breaks, the target dies or a step times out, the plan stops on every client and they may plan again from the open window. A step the game refuses is re-sent once after 2 seconds.
+
+- **Requires Trust installed** (it reads Trust's `cylibs/res/skills.lua` and `cylibs/util/skillchain_util.lua`, so chain data and rules match Trust). Default folder is `addons/Trust/` next to Boom; change with `//boom sc trust <folder>`.
+- **Turn Trust's own skillchains off on every character** with `//trust sc off` so two systems don't fire.
+- Works for any number of party/alliance members running Boom on the same PC (Windower IPC). Boom clients not in your party are ignored.
+- Each member is used once per chain; with `mixed` on (default) a member may give one weapon skill and one blood pact.
+- If no chain is possible, nothing is fired: a lone ready character keeps its TP.
+
+Settings changed on one character are sent to every Boom client and saved in `data/sc_settings.xml`.
+
+- `//boom sc` or `//boom sc status` - settings, Trust data folder, last plan and result
+- `//boom sc on|off` - enable or disable coordinated skillchains (on by default)
+- `//boom sc steps 2-6` - longest chain to plan (default 3)
+- `//boom sc hold on|off` - save TP for a 3-step chain when the party could make one; ignored when it can't
+- `//boom sc holdtp <n>` - stop holding once a ready weapon-skill member reaches this TP (default 3000)
+- `//boom sc target <list>|clear` - prefer chain properties or elements, e.g. `Light,Fusion` or `Fire`; falls back to the best available chain
+- `//boom sc opener <list>|clear` - prefer openers, e.g. `Savage Blade` or `Cioara:Flaming Crush`; falls back to any usable opener
+- `//boom sc tp <n>` - minimum TP for weapon skills (default 1000)
+- `//boom sc bp on|off`, `//boom sc mixed on|off`, `//boom sc announce local|party|off`
+- `//boom sc set <key> <value>` - timing: `poll_window` 0.5, `ack_window` 0.7, `step_margin` 0.4, `step_timeout` 6, `retry_delay` 1.5 (seconds)
+
+Plan choice, in order: a requested target, a requested opener, the highest chain level, then more steps (each step is another magic-burst window). A chain that is already a requested target is not continued into one that isn't. `//boom debug on` adds `SC:` lines explaining polls, plans, refusals and aborts.
 
 ## Commands
 
@@ -41,6 +66,8 @@ A skillchain effect can be present in the action's additional-effect message or,
 Boom continues to attempt one spell per detected skillchain, with the same **0.9-second casting delay**. It doesn't move or retarget your character, and normal spell-eligibility checks still apply. The default chat output is quiet; debug and trace are explicit opt-ins. Chat output follows the shared FFXI addon convention: `[Boom]` label color 200; headings 167; syntax 207; ordinary descriptions/values 0; ON green 158; OFF red 167; ASCII hyphens only. By user preference, **Debug details use readable yellow color 207** instead of neutral white; Trace and ordinary details stay white.
 
 ## Changelog
+
+- **0.2.0-test5 (2026-11-16)** - Add the party skillchain coordinator (`sc/`, `//boom sc`): IPC poll, offers, plan, confirmation and packet-timed execution of weapon skills and Blood Pact: Rage across any number of Boom clients; uses Trust's skillchain data and combination rules. Options: steps, hold for 3-step, targets, openers, min TP, blood pacts, mixed, announce. Burst behavior, 0.9-second delay and spell choice unchanged; if the coordinator cannot load, bursting runs as before.
 
 - **0.1.3-test4 (2026-11-12)** - Make the text of `[Boom] Debug:` messages yellow (color 207) instead of white, including detection, non-chain observation, and skip explanations. Keep heading/label, other messages, trace, casting, and help colors unchanged. Review Cioara's real November 12 log and document observed cast refusals separately from successful detection; no change to cast logic, 0.9-second delay, spell selection, or targeting.
 

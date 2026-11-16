@@ -1,5 +1,39 @@
 # Boom testing log
 
+## Current Development Status - November 16, 2026 (America/Chicago)
+
+- **Source / branch:** GitHub `rerorriM-Mirrorer/Boom` (new, was empty). `main` = baseline commit of the user's installed `0.1.3-test4` zip (no code change). This work is on **`test/sc-coordinator`**; keep it off `main` until live success.
+- **Change in 0.2.0-test5:** New skillchain coordinator in `sc/` (`trust_data.lua`, `planner.lua`, `protocol.lua`, `coordinator.lua`, `boom_sc.lua`) and `//boom sc` commands. Boom.lua only gains a guarded `require`, the `sc` command route, one help line, one status line and the startup text. Burst detection, 0.9-second delay, spell choice and targeting are unchanged.
+- **Trust foundation (read from Trust `8f65874`, `test/autorun-and-settings-fix`):** chain properties come from Trust's own `cylibs/res/skills.lua` and combinations/levels from `cylibs/util/skillchain_util.lua`, loaded from the installed Trust folder at runtime (not copied). Combination order follows `SkillchainBuilder:get_skillchain_by_properties`; closed at level 4 (`SkillchainStep:is_closed`); window = delay (3 or skills.lua value) then expires at start + delay + 8 - step (`skillchain_tracker.lua`); WS hit message ids from `action_message_util`; WS/BP preconditions and WS reach formula from `weapon_skill.lua`, `blood_pact_rage.lua`, `battle_util.lua`.
+- **Offline verification (not FFXI):** Lua 5.1 (and LuaJIT for the burst tests). `tests/mock_test.lua` 28 burst checks unchanged and passing. `tests/sc_planner_test.lua` 21 checks on Trust's real data. `tests/sc_coordinator_test.lua` 14 checks: three to six simulated clients on a fake IPC bus and a fake game producing action packets. `tests/sc_wiring_test.lua` 8 checks loading the real Boom.lua. All files parse with `luac5.1 -p`. Run from the Boom folder: `BOOM_TRUST=<Trust folder> lua5.1 tests/sc_planner_test.lua` (same for the other sc_ tests). Offline tests stub Windower's `sets`/`lists` (Windower's own copies need its patched parser).
+- **Bug found by simulation and fixed before delivery:** a Lua `a and b or c` slip made the summoner refuse its own blood pact step (checked TP). Also added: continuing an on-target chain into an off-target one is refused; a refused step is re-sent once after 2 seconds.
+- **Inferred, confirm live:** Windower `require` finds Trust's files after Boom adds the Trust folder to `package.path`; avatar Blood Pact packets are category 13 with `param` = the job ability id (skills.lua `job_abilities` keys); `get_abilities().job_abilities` lists only the summoned avatar's pacts; `/ws "Name" <mob id>` and `/pet "Name" <mob id>` work as input (Trust sends the same form); 21-yalm summoner-to-mob blood pact range; 2 seconds is enough to see one's own action before retrying; IPC reaches only clients on the same PC.
+- **Live checks pending:** see the batch below.
+- **Rollback:** `//lua unload Boom`, restore the `0.1.3-test4` folder (or `//boom sc off`, which is sent to every client and saved, to keep only bursting). Back up `data/` first.
+
+---
+
+## Batch: 0.2.0-test5 - November 16, 2026
+
+**User request:** Party skillchain coordinator built into Boom, working with any number of multiboxed characters, as a test for overhauling Trust's automatic skillchains; reuse Trust's logic where possible. User will test with Trust skillchains Off on all characters.
+
+**Install:** On every character `//lua unload Boom`. Back up `addons/Boom/data/` if present. Copy the delivered `Boom/` folder over `addons/Boom/` (it adds `sc/`). On every character `//trust sc off` (Trust AutoSkillchainMode Off) - Trust must stay installed. `//lua load Boom` on every character. Startup should end with `| Skillchains ON`. If it says Trust data not found: `//boom sc trust C:/path/to/Windower/addons/Trust/` on that character.
+
+**Live tests requested (record results here):**
+
+1. `//boom sc status` on each character: `Trust data:` shows the Trust folder; settings identical on all.
+2. Two melee at 1000+ TP engaged on one mob: both get a `Skillchain:` line with the same plan; only the planned order fires; the closer makes the named chain; Boom bursts on it. Note real seconds between steps.
+3. Cioara with an avatar out, Blood Pact: Rage ready, one melee at 1000 TP: confirm the blood pact fires on the plan's mob (not another target) and its packet advances the plan (if Cioara's step is never recognized, `//boom debug on` and report the `SC:` lines - category 13 mapping is inferred).
+4. Three members: confirm a 3-step chain, and that nobody uses a weapon skill inside another's step delay.
+5. `//boom sc hold on` with one member under 1000 TP: others wait; when the third reaches 1000 the 3-step runs. Then confirm hold is skipped when the party has no 3-step chain.
+6. `//boom sc target Darkness` (or a property your party can and cannot make): on-target chain chosen when possible, otherwise `fallback` in `//boom sc status` Last result.
+7. `//boom sc opener <a WS>`: that opener is used.
+8. Manually weapon skill out of turn mid-plan: every client prints `Skillchain stopped: Unexpected ...` and recovers.
+9. Kill the mob or zone mid-plan: no late weapon skills.
+10. Watch for "Unable to use weapon skill" refusals and whether the 2-second retry lands inside the window.
+
+**Not done:** Trust's own opener-fallback fix (separate change to Trust); aeonic properties (Trust includes them only with the matching weapon; the coordinator ignores aeonic for now); burst-element preference for Boom's mages.
+
 ## Current Development Status - November 12, 2026 (America/Chicago)
 
 - **Source / branch:** Baseline: user-tested `Boom_0.1.2_test3.zip`, local commit `e0ef0e9`; this color-only change is in local Git branch `test/debug-yellow-log-review`. There is no Boom GitHub repository/remote, so no GitHub push or published remote branch is claimed.

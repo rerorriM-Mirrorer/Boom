@@ -1,8 +1,9 @@
 -- Boom: an intentionally small, load-and-burst Windower 4 addon.
--- First test version. No automatic target changes or pet commands.
+-- Bursting never changes targets or uses pet commands. The optional skillchain
+-- coordinator (sc/, //boom sc) uses weapon skills and Blood Pact: Rage.
 _addon.name = 'Boom'
 _addon.author = 'A'
-_addon.version = '0.1.3-test4'
+_addon.version = '0.2.0-test5'
 _addon.commands = {'boom'}
 _addon.windower = '4'
 
@@ -96,6 +97,21 @@ end
 local function skip(reason)
     last_skip = reason
     debug(reason)
+end
+
+-- Skillchain coordinator (sc/). Isolated: if it fails to load, bursting still works.
+local sc_module = nil
+do
+    local ok, mod = pcall(require, 'sc/boom_sc')
+    if ok then
+        local init_ok, err = pcall(mod.init, {
+            message = message, notice = notice, debug = debug,
+            colored = colored, state_color = state_color,
+        })
+        if init_ok then sc_module = mod else notice('Skillchains:', 'OFF - '..tostring(err)) end
+    else
+        notice('Skillchains:', 'OFF - '..tostring(mod))
+    end
 end
 
 local function disabled(player)
@@ -316,6 +332,7 @@ local function show_help()
     help_line(' on|off', 'Enable or disable automatic bursting')
     help_line(' debug on|off', 'Explain skillchain and casting decisions')
     help_line(' trace on|off', 'Show matching-target action message IDs for missed windows')
+    help_line(' sc help', 'Coordinated party skillchains (weapon skills, blood pacts)')
     help_line(' restart', 'Reload Boom')
     help_line(' unload', 'Unload Boom')
 end
@@ -328,10 +345,22 @@ local function show_status()
     notice('Last WS:', last_ws_packet)
     notice('Last cast:', last_action)
     notice('Last skip:', last_skip)
+    notice('Skillchains:', sc_module and sc_module.status_line() or 'not loaded')
 end
 
-windower.register_event('addon command', function(command, value)
+windower.register_event('addon command', function(command, value, ...)
     command = command and command:lower() or 'help'
+    if command == 'sc' then
+        if not sc_module then
+            notice('Skillchains:', 'not loaded')
+            return
+        end
+        local raw = {value, ...}
+        local args = {}
+        for i, word in ipairs(raw) do args[i] = word:lower() end
+        sc_module.command(args, raw)
+        return
+    end
     value = value and value:lower() or nil
     if command == 'on' or command == 'off' then
         active = command == 'on'
@@ -371,4 +400,5 @@ windower.register_event('job change', function()
     sequence = sequence + 1
 end)
 
-message(colored('Auto', 167)..' '..state_color(active)..colored(' - Loaded; watching skillchains', 0))
+message(colored('Auto', 167)..' '..state_color(active)..colored(' - Loaded; watching skillchains', 0)..
+    colored(' | Skillchains ', 0)..(sc_module and colored(sc_module.status_line(), 0) or colored('OFF', 167)))
