@@ -110,6 +110,8 @@ function boom_sc.help()
     help_line(' solo <n>|off', 'With no chain possible, weapon skill alone at this TP (default 3000)')
     help_line(' bp on|off', 'Include Blood Pact: Rage')
     help_line(' mixed on|off', 'Let one member give a weapon skill and a blood pact')
+    help_line(' aoe on|off', 'Allow AoE weapon skills (off: never used)')
+    help_line(' aoe list|add|remove <name>|reset', 'Show or edit which weapon skills count as AoE')
     help_line(' preferbp on|off', 'Prefer chains that use a blood pact over weapon skills only (on)')
     help_line(' grace <sec>', 'Wait after a continuation window opens before the next step (1)')
     help_line(' announce local|party|off', 'Where to show plans')
@@ -124,7 +126,8 @@ function boom_sc.status()
     ui.message(colored('Skillchains', 167) .. ' ' .. (sc.data and bool_text(settings.enabled) or colored('NO DATA', 167)) ..
         colored(' | Steps ' .. tostring(settings.max_steps) .. ' | Hold ', 0) .. bool_text(settings.hold_for_three) ..
         colored(' | BP ', 0) .. bool_text(settings.allow_bp ~= false) .. colored(' | Prefer BP ', 0) ..
-        bool_text(settings.prefer_bp ~= false) .. colored(' | Grace ' .. tostring(settings.grace) .. 's | Min TP ' .. tostring(settings.min_tp) ..
+        bool_text(settings.prefer_bp ~= false) .. colored(' | AoE WS ', 0) .. bool_text(settings.allow_aoe == true) ..
+        colored(' | Grace ' .. tostring(settings.grace) .. 's | Min TP ' .. tostring(settings.min_tp) ..
         ' | Solo ' .. ((tonumber(settings.solo_tp) or 0) > 0 and tostring(settings.solo_tp) or 'off'), 0))
     ui.notice('Targets:', settings.targets ~= '' and settings.targets or 'Any (best available)')
     ui.notice('Openers:', settings.openers ~= '' and settings.openers or 'Any')
@@ -133,6 +136,45 @@ function boom_sc.status()
     ui.notice('Last result:', sc.last_result)
     if sc.plan then
         ui.notice('Active:', 'step ' .. sc.plan.index .. ' of ' .. #sc.plan.steps .. ' on mob ' .. tostring(sc.plan.mob))
+    end
+end
+
+local function show_aoe_list()
+    local list = coordinator.split_list(settings.aoe_ws)
+    ui.notice('AoE weapon skills:', (#list > 0 and table.concat(list, ', ') or 'none') ..
+        (settings.allow_aoe == true and ' (allowed)' or ' (never used)'))
+end
+
+-- //boom sc aoe [on|off|list|add <name>|remove <name>|reset]
+function boom_sc.aoe_command(value, name)
+    if value == nil or value == 'on' or value == 'off' then
+        sc:set_everywhere('allow_aoe', tostring(on_off(value, settings.allow_aoe == true)))
+        ui.message(colored('AoE weapon skills', 167) .. ' ' .. bool_text(settings.allow_aoe == true) ..
+            colored(settings.allow_aoe == true and ' - may be used in skillchains' or ' - never used', 0))
+    elseif value == 'list' then
+        show_aoe_list()
+    elseif value == 'reset' then
+        sc:set_everywhere('aoe_ws', coordinator.DEFAULT_AOE_WS)
+        show_aoe_list()
+    elseif (value == 'add' or value == 'remove') and name ~= '' then
+        local ws = sc:canonical_ws(name)
+        if not ws then
+            ui.notice('Unknown weapon skill:', name)
+            return
+        end
+        local list, found = {}, false
+        for _, item in ipairs(coordinator.split_list(settings.aoe_ws)) do
+            if item:lower() == ws:lower() then found = true
+                if value == 'add' then list[#list + 1] = item end
+            else list[#list + 1] = item end
+        end
+        if value == 'add' and not found then list[#list + 1] = ws end
+        sc:set_everywhere('aoe_ws', table.concat(list, ','))
+        show_aoe_list()
+    else
+        ui.notice('Unknown aoe command:', tostring(value))
+        help_line(' aoe on|off', 'Allow AoE weapon skills (off: never used)')
+        help_line(' aoe list|add|remove <name>|reset', 'Show or edit which weapon skills count as AoE')
     end
 end
 
@@ -166,6 +208,8 @@ function boom_sc.command(args, raw)
     elseif cmd == 'bp' then
         sc:set_everywhere('allow_bp', tostring(on_off(value, settings.allow_bp ~= false)))
         ui.message(colored('Blood pacts', 167) .. ' ' .. bool_text(settings.allow_bp))
+    elseif cmd == 'aoe' then
+        boom_sc.aoe_command(value, table.concat(raw, ' ', 3))
     elseif cmd == 'preferbp' then
         sc:set_everywhere('prefer_bp', tostring(on_off(value, settings.prefer_bp ~= false)))
         ui.message(colored('Prefer blood pacts', 167) .. ' ' .. bool_text(settings.prefer_bp))

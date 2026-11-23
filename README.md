@@ -1,4 +1,4 @@
-# Boom - Windower 4 (0.2.3-test8)
+# Boom - Windower 4 (0.2.4-test9)
 
 **Load it. Skillchain happens. Boom.** Boom automatically attempts one learned, job-usable, ready, affordable magic burst on the currently targeted enemy when it detects a skillchain. No activation or spell-tier setup required. This update **keeps the exact 0.9-second delay** that the user reported working in game.
 
@@ -46,6 +46,8 @@ Settings changed on one character are sent to every Boom client and saved in `da
 - `//boom sc solo <n>|off` - when no chain is possible, a member at this TP weapon skills alone (default 3000)
 - Shortcuts: `//boom target ...`, `//boom opener ...`, `//boom hold ...`, `//boom steps ...`, `//boom solo ...` work without `sc`
 - `//boom sc bp on|off`, `//boom sc mixed on|off`, `//boom sc announce local|party|off`
+- `//boom sc aoe on|off` - allow area-of-effect weapon skills (off); shortcut `//boom aoe on|off`
+- `//boom sc aoe list|add <name>|remove <name>|reset` - show or edit which weapon skills count as AoE
 - `//boom sc preferbp on|off` - prefer chains that use a blood pact (on)
 - `//boom sc grace <sec>` - wait after a continuation window opens before the next step (1); shortcut `//boom grace <sec>`
 - `//boom sc set color_member|color_ability|color_chain <n>` - plan line colors (defaults: names 207 light blue, abilities 0 white, result 158 green, as seen on the user's screen)
@@ -54,6 +56,8 @@ Settings changed on one character are sent to every Boom client and saved in `da
 Plan choice, in order: a requested target, a requested opener, chains that use a blood pact (`preferbp`, on), the highest chain level, then more steps (each step is another magic-burst window). With `preferbp` on, a lower-level chain that uses the avatar can win over a higher-level weapon-skill-only chain; `//boom sc preferbp off` puts chain level first again.
 
 **Burst before skillchain for blood pacts:** Blood Pact: Rage is one shared recast. When a summoner could burst a skillchain with a magical pact, the planner does not ask its avatar to continue that skillchain with a physical pact; the recast is kept for the burst. Openers and steps that don't follow a skillchain can still use the pact.
+
+**AoE weapon skills (0.2.4):** by default Boom never uses an area-of-effect weapon skill, so a skillchain can't pull or wake nearby monsters. The block covers plans, openers and the solo release, and it is shared by every Boom client. The list starts as Trust's AoE list plus Cataclysm: Aeolian Edge, Cyclone, Earth Crusher, Cataclysm, Spinning Scythe, Spinning Attack, Shockwave, Circle Blade, Fell Cleave, Sonic Thrust. `//boom aoe on` lets them be used again. Use `//boom aoe add <name>` / `remove <name>` to change the list (names match exactly, so Steel Cyclone is not Cyclone) and `//boom aoe reset` to restore it. Saved in `data/sc_settings.xml`.
 
 **Grace period:** a step that continues a skillchain fires `grace` seconds (default 1) after its window opens, instead of right at the opening. Planning and confirmation between characters still happen during the wait. For a blood pact the wait is shortened when needed so the pact (about 3 seconds to land) still lands before the window closes. `//boom sc grace <0-4>`; `0` returns to the old 0.4-second margin. A chain that is already a requested target is not continued into one that isn't. `//boom debug on` adds `SC:` lines explaining polls, plans, refusals and aborts.
 
@@ -83,6 +87,7 @@ Boom continues to attempt one spell per detected skillchain, with the same **0.9
 
 ## Changelog
 
+- **0.2.4-test9 (2026-11-23)** - AoE weapon skills are never used unless `//boom aoe on`; the AoE list is editable (`//boom aoe list|add|remove|reset`).
 - **0.2.3-test8 (2026-11-16)** - Summoners burst with a magical blood pact before spells; skillchain plans prefer blood pacts over weapon skills and keep Blood Pact: Rage for the burst when the avatar can burst the chain; `//boom mb on|off` (saved); 1-second grace period before continuing a skillchain (`//boom sc grace`).
 - **0.2.2-test7 (2026-11-16)** - The `Skillchain:` plan line shows characters, abilities and the result in three colors. Works alongside Failsafe (Broguypal fork): when Failsafe announces it will re-send a refused command, Boom waits a second before its own retry, so both don't send it.
 

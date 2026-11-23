@@ -3,7 +3,7 @@
 -- coordinator (sc/, //boom sc) uses weapon skills and Blood Pact: Rage.
 _addon.name = 'Boom'
 _addon.author = 'A'
-_addon.version = '0.2.3-test8'
+_addon.version = '0.2.4-test9'
 _addon.commands = {'boom'}
 _addon.windower = '4'
 
@@ -604,7 +604,7 @@ windower.register_event('addon command', function(command, value, ...)
     command = command and command:lower() or 'help'
     -- Skillchain options also work without "sc": //boom target light
     local sc_words = { sc=true, target=true, targets=true, opener=true, openers=true,
-        hold=true, holdtp=true, steps=true, solo=true, grace=true, preferbp=true }
+        hold=true, holdtp=true, steps=true, solo=true, grace=true, preferbp=true, aoe=true }
     if sc_words[command] then
         if not sc_module then
             notice('Skillchains:', 'not loaded')

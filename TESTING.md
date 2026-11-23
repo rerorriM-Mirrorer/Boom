@@ -1,3 +1,14 @@
+## Current Development Status — 2026-11-23 (America/Chicago)
+
+- Repo/branch: rerorriM-Mirrorer/Boom `test/aoe-ws`, 0.2.4-test9. STACK: main@3eaca89 -> test/bp-priority-grace@d7eb858 -> test/aoe-ws.
+- installed_base: Unknown (0.2.3-test8 `a224add` assumed; A to confirm). Package is cumulative from main 3eaca89 so it installs over either.
+- Change: AoE weapon skills are left out of every skillchain offer unless `allow_aoe` is on (default off), so no plan, opener or solo release uses one. List `aoe_ws` (Trust SkillchainAbility:is_aoe names + Cataclysm) is editable. Commands `//boom sc aoe on|off|list|add <name>|remove <name>|reset`, shortcut `//boom aoe`. Shared over IPC, saved in data/sc_settings.xml. Also AGENTS shared section synced to canon 2026-11-21.3.
+- Tunables: allow_aoe = false; aoe_ws = Aeolian Edge,Cyclone,Earth Crusher,Cataclysm,Spinning Scythe,Spinning Attack,Shockwave,Circle Blade,Fell Cleave,Sonic Thrust.
+- Checks (Verified): luac5.1 -p on all .lua OK; lua5.1 tests: mock all pass, coordinator 26, planner 25, wiring 10 pass. LuaJIT sc tests fail before and after (Trust skills.lua escape; KNOWN_FAILS).
+- Live: none for this build. Inferred: Cataclysm is AoE; a saved sc_settings.xml without the new keys picks up the defaults (AoE off).
+- Pending live: an AoE-only character never weapon skills through Boom; `//boom aoe on` restores it; all 0.2.3-test8 live tests still open.
+- Next: A live-tests test9; if good together with test8, promote to main.
+
 ## Current Development Status — 2026-11-20 (America/Chicago)
 
 - Docs sync to canon 2026-11-20.1 (`agents_shared_version` and `workflow_version`); project-specific lines moved to the AGENTS REPO block: project-specific principles list (~~11 bullets~~ 10 bullets; corrected 2026-11-20) and AGENTS first-test note; no runtime change, no FFXI test.

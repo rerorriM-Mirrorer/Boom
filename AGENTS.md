@@ -77,10 +77,11 @@ Promote to trusted branch only after A's live confirmation.
 ## REPO (repo-specific; preserved on sync)
 NAME: Boom (rerorriM-Mirrorer/Boom) — automatic Magic Burst and party skillchain coordinator. Windower 4, Lua 5.1. Original focus: **load the addon and it tries to hit magic bursts automatically.** First-test addon: preserve minimal load-and-burst behavior, distinguish mocked checks from actual FFXI verification, keep changes on test branches until A confirms live success.
 TRUSTED: main (3eaca89, 0.2.2-test7 plus color defaults; Live known-good 2026-11-16).
-ACTIVE: test/bp-priority-grace (0.2.3-test8; offline tests only, live Pending). test/sc-coordinator is the same commit as main.
+ACTIVE: test/aoe-ws (0.2.4-test9; stacked on test/bp-priority-grace 0.2.3-test8; offline tests only, live Pending). test/sc-coordinator is the same commit as main.
 LIVE_FILES: Boom.lua, burst_pacts.lua, sc/ (Inferred from repository layout).
 INTERFACES: reads Trust data cylibs/res/skills.lua and cylibs/util/skillchain_util.lua (Trust must stay installed, skillchains off: //trust sc off). Waits 1 s after Failsafe prints "was refused. Waiting for readiness." before its own retry (Failsafe notify must stay on). Boom clients talk over Windower IPC on the same PC.
-CHECKS: luac -p (5.1) on changed .lua; Lua 5.1 tests in tests/ (mock_test.lua, sc_coordinator_test.lua, sc_planner_test.lua, sc_wiring_test.lua) (Verified file names; run method Inferred).
+CHECKS: luac5.1 -p on changed .lua; `for t in tests/*_test.lua; do lua5.1 $t; done` (host setup: `apt-get update && apt-get install -y lua5.1`; sc tests read Trust data from a clone at /home/claude/rerorrim-mirrorer/trust or $BOOM_TRUST). Verified 2026-11-23.
+KNOWN_FAILS: LuaJIT cannot run the sc tests: Trust cylibs/res/skills.lua:306 has an invalid escape sequence that LuaJIT rejects (Verified 2026-11-23; pre-existing, Trust side). mock_test.lua passes under LuaJIT.
 Project-specific principles (moved verbatim from the former project WORKFLOW.md on 2026-11-20; the testing-ZIP sentence was dropped because canon D5 supersedes it):
 - Prefer the smallest responsible code change; do not introduce menus, unrelated automation, or settings that complicate the initial use case.
 - `main` represents known-good behavior only after live testing. Experimental changes live on test branches. Keep changes traceable with small coherent commits.

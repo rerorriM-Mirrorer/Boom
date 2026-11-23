@@ -532,4 +532,41 @@ check('Blood Pact: Rage is kept for the burst after a chain the avatar can burst
     eq(#w2.log, 3, table.concat(w2.log, ' | '))
 end)
 
+check('AoE weapon skills are never used by default; allow_aoe and the list control them', function()
+    -- Only an AoE weapon skill: nothing fires, not even a solo release.
+    local w = World.new()
+    w:add_client('Clairvaux', { tp = 3000, ws = { 'Circle Blade' } })
+    w:advance(5)
+    eq(#w.commands, 0, table.concat(w.commands, ' | '))
+    -- With a single-target one available, that one is used instead.
+    local w2 = World.new()
+    w2:add_client('Clairvaux', { tp = 3000, ws = { 'Circle Blade', 'Savage Blade' } })
+    w2:advance(5)
+    eq(w2.commands[1], 'Clairvaux: input /ws "Savage Blade" 9001')
+    -- allow_aoe on: the AoE weapon skill may be used.
+    local w3 = World.new()
+    w3:add_client('Clairvaux', { tp = 3000, ws = { 'Circle Blade' }, settings = { allow_aoe = true } })
+    w3:advance(5)
+    eq(w3.commands[1], 'Clairvaux: input /ws "Circle Blade" 9001')
+    -- Taken off the list: usable while AoE stays off. Name match is exact (Steel Cyclone is not Cyclone).
+    local w4 = World.new()
+    local c = w4:add_client('Clairvaux', { tp = 3000, ws = { 'Circle Blade' }, settings = { aoe_ws = 'Cyclone' } })
+    w4:advance(5)
+    eq(w4.commands[1], 'Clairvaux: input /ws "Circle Blade" 9001')
+    eq(c.sc:is_aoe_ws(ws_by_name['Steel Cyclone']), false, 'Steel Cyclone')
+    eq(c.sc:is_aoe_ws(ws_by_name['Cyclone']), true, 'Cyclone')
+    eq(c.sc:canonical_ws('circle blade'), 'Circle Blade')
+end)
+
+check('allow_aoe and aoe_ws are shared settings', function()
+    local w = standard_party()
+    w.by_name['Clairvaux'].sc:set_everywhere('allow_aoe', 'true')
+    w.by_name['Clairvaux'].sc:set_everywhere('aoe_ws', 'Cyclone,Shockwave')
+    w:advance(0.1)
+    for _, c in ipairs(w.clients) do
+        eq(c.settings.allow_aoe, true, c.name .. ' allow_aoe')
+        eq(c.settings.aoe_ws, 'Cyclone,Shockwave', c.name .. ' aoe_ws')
+    end
+end)
+
 print(passed .. ' coordinator simulation tests passed')

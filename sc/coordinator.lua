@@ -56,6 +56,12 @@ local RANGE_MULT = { [2]=1.55, [3]=1.490909, [4]=1.44, [5]=1.377778, [6]=1.30, [
 
 local BP_RANGE = 21 -- Inferred: summoner-to-mob limit for Blood Pact: Rage; confirm live.
 
+-- Area-of-effect weapon skills: Trust SkillchainAbility:is_aoe list plus Cataclysm
+-- (Cataclysm Inferred from game knowledge; Trust's list does not include it).
+-- Blocked unless allow_aoe is on; edit with //boom sc aoe add|remove|reset.
+coordinator.DEFAULT_AOE_WS = 'Aeolian Edge,Cyclone,Earth Crusher,Cataclysm,Spinning Scythe,' ..
+    'Spinning Attack,Shockwave,Circle Blade,Fell Cleave,Sonic Thrust'
+
 coordinator.default_settings = {
     enabled = true,
     max_steps = 3,
@@ -64,6 +70,8 @@ coordinator.default_settings = {
     min_tp = 1000,
     allow_bp = true,
     mixed = true,
+    allow_aoe = false,   -- AoE weapon skills (aoe_ws list) may be used; off = never offered
+    aoe_ws = coordinator.DEFAULT_AOE_WS, -- comma list of weapon skill names treated as AoE
     prefer_bp = true,    -- a chain that uses a blood pact beats one that doesn't (before chain level)
     grace = 1.0,         -- seconds after a continuation window opens before the next step fires
     targets = '',        -- comma list: Light,Fusion,Fire
@@ -259,11 +267,36 @@ function coordinator:bp_blocker(mob_id)
     return nil
 end
 
+-- Lower-cased set of the aoe_ws names.
+function coordinator:aoe_set()
+    local set = {}
+    for _, name in ipairs(split_list(self.settings.aoe_ws)) do set[name:lower()] = true end
+    return set
+end
+
+function coordinator:is_aoe_ws(ws_id, set)
+    local r = self.res.weapon_skills[ws_id]
+    local name = (r and r.en) or self.data.name('ws', ws_id)
+    return name ~= nil and (set or self:aoe_set())[name:lower()] == true
+end
+
+-- Weapon skill resource name with game capitalization ("circle blade" -> "Circle Blade"), or nil.
+function coordinator:canonical_ws(text)
+    local t = tostring(text or ''):lower():gsub('^%s+', ''):gsub('%s+$', '')
+    for _, r in pairs(self.res.weapon_skills or {}) do
+        if type(r) == 'table' and r.en and r.en:lower() == t then return r.en end
+    end
+    return nil
+end
+
 function coordinator:known_abilities()
     local abilities = self.w.ffxi.get_abilities() or {}
     local ws, bp = {}, {}
+    -- AoE weapon skills are left out of every offer unless allowed, so no plan,
+    -- opener or solo release can use one.
+    local aoe = self.settings.allow_aoe ~= true and self:aoe_set() or nil
     for _, id in ipairs(abilities.weapon_skills or {}) do
-        if #self.data.props('ws', id) > 0 then ws[#ws + 1] = id end
+        if #self.data.props('ws', id) > 0 and not (aoe and self:is_aoe_ws(id, aoe)) then ws[#ws + 1] = id end
     end
     if self.w.ffxi.get_mob_by_target('pet') then
         for _, id in ipairs(abilities.job_abilities or {}) do
@@ -834,11 +867,11 @@ end
 ----------------------------------------------------------------------------
 -- settings and commands
 
-local BOOL_KEYS = { enabled=true, hold_for_three=true, allow_bp=true, mixed=true, prefer_bp=true }
+local BOOL_KEYS = { enabled=true, hold_for_three=true, allow_bp=true, mixed=true, prefer_bp=true, allow_aoe=true }
 local NUMBER_KEYS = { max_steps=true, hold_max_tp=true, min_tp=true, poll_window=true,
     ack_window=true, step_margin=true, step_timeout=true, retry_delay=true, solo_tp=true,
     retry_interval=true, grace=true, color_member=true, color_ability=true, color_chain=true }
-local TEXT_KEYS = { targets=true, openers=true, announce=true }
+local TEXT_KEYS = { targets=true, openers=true, announce=true, aoe_ws=true }
 
 function coordinator:apply_setting(key, value, from_ipc)
     if BOOL_KEYS[key] then

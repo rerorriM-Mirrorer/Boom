@@ -28,7 +28,8 @@ local function boot(trust_path)
         local spells = { ['Fire'] = { id = 101, en = 'Fire', levels = { [4] = 1 }, mp_cost = 5 } }
         return {
             spells = { with = function(_, _, v) return spells[v] end },
-            weapon_skills = {}, job_abilities = { with = function() return nil end },
+            weapon_skills = { [38] = { id = 38, en = 'Circle Blade' }, [11] = { id = 11, en = 'Spinning Axe' } },
+            job_abilities = { with = function() return nil end },
         }
     end
     package.preload['chat'] = function()
@@ -161,6 +162,18 @@ check('//boom mb off saves and stops bursting; skillchain settings still work; g
     w.cmd('sc', 'preferbp', 'off'); assert(w.ipc[#w.ipc] == 'boomsc|set|prefer_bp|false', tostring(w.ipc[#w.ipc]))
     w.cmd('sc', 'status'); assert(w.has('Grace 2s'))
     w.cmd('mb', 'on'); assert(w.has('Magic bursts</> <158>ON'))
+end)
+
+check('//boom aoe toggles AoE weapon skills (off by default) and edits the list', function()
+    local w = boot(env.trust_root())
+    w.cmd('sc', 'status'); assert(w.has('AoE WS </><167>OFF'), table.concat(w.chats, '\n'))
+    w.cmd('aoe', 'on'); assert(w.ipc[#w.ipc] == 'boomsc|set|allow_aoe|true', tostring(w.ipc[#w.ipc]))
+    w.cmd('sc', 'aoe', 'off'); assert(w.ipc[#w.ipc] == 'boomsc|set|allow_aoe|false', tostring(w.ipc[#w.ipc]))
+    w.cmd('sc', 'aoe', 'list'); assert(w.has('Circle Blade'), table.concat(w.chats, '\n'))
+    w.cmd('sc', 'aoe', 'add', 'No Such Skill'); assert(w.has('Unknown weapon skill'))
+    w.cmd('aoe', 'add', 'spinning', 'axe'); assert(w.ipc[#w.ipc]:find(',Sonic Thrust,Spinning Axe$'), tostring(w.ipc[#w.ipc]))
+    w.cmd('aoe', 'remove', 'CIRCLE', 'BLADE'); assert(not w.ipc[#w.ipc]:find('Circle Blade'), tostring(w.ipc[#w.ipc]))
+    w.cmd('aoe', 'reset'); assert(w.ipc[#w.ipc]:find('Circle Blade', 1, true), tostring(w.ipc[#w.ipc]))
 end)
 
 print(passed .. ' wiring tests passed')
